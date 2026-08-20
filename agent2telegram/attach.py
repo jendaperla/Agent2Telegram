@@ -44,6 +44,13 @@ TYPING_INTERVAL = 1.5
 #: grace we show bubbles anyway, since some turns call a tool with no intro text.
 TUI_BUBBLE_GRACE = 3.0
 
+#: LOCAL PATCH (viz PATCHES.md v ~/brain/scripts): jak dlouho po konci tahu se čeká, než vystřelí
+#: záchranná síť v `_finish_turn`. Původně se kontrola dělala okamžitě a prohrávala závod s běžnou
+#: cestou: `_send_final` nastaví `_turn_text_sent` až po návratu ze `send_message`, takže když se
+#: odeslání trefilo do konce tahu, síť viděla False a poslala odpověď podruhé. Navíc posílá bez
+#: `key`, takže ji ledger nezachytí. Odklad dá běžné cestě čas doručit; síť pak najde True a mlčí.
+BACKSTOP_DELAY = 5.0
+
 #: Registered with Telegram (setMyCommands) so typing "/" shows the command autocomplete menu.
 BOT_COMMANDS = [
     {"command": "start", "description": "Intro and what you can send"},
@@ -151,6 +158,11 @@ class AttachBridge:
         self._seen_tools: set = set()
         self._tui_seen: set = set()          # Codex TUI scrape: tool lines already shown this turn
         self._turn_text_sent = False         # has any text been forwarded this turn (bubble gate)
+        # LOCAL PATCH: odložená záchranná síť. `_turn_seq` roste s každým tahem z Telegramu, takže
+        # odložená kontrola pozná, že mezitím začal nový tah, a nevystřelí do něj.
+        self._turn_seq = 0
+        self._backstop_due: float | None = None   # monotonic čas, kdy se má síť přezkoušet
+        self._backstop_seq = -1                   # tah, ke kterému ta čekající kontrola patří
 
     # ---- transcript resolution --------------------------------------------
     def _codex_sessions_dir(self) -> Path:
@@ -495,6 +507,9 @@ class AttachBridge:
         self._max_gap = 0.0
         self._last_typing = now
         self._turn_text_sent = False             # gate TUI bubbles until intro text lands
+        # LOCAL PATCH: nový tah zneplatní čekající kontrolu záchranné sítě z tahu předchozího.
+        self._turn_seq += 1
+        self._backstop_due = None
         # Seed the TUI dedup with tool lines ALREADY on screen from previous turns, so the
         # scraper only emits calls that appear DURING this turn — otherwise stale lines still
         # visible in the pane get re-sent as bubbles under the new turn.
@@ -658,15 +673,12 @@ class AttachBridge:
         was_active = self._turn_active.is_set()
         # Backstop: a Telegram-originated turn must NEVER go unanswered. If nothing was forwarded
         # this turn (the [tg] marker was forgotten, the turn was a long heads-down working stretch,
-        # or interim forwarding missed it), deliver the final assistant message now. The
-        # `_turn_text_sent` guard means this only fires when truly nothing was sent (no double-send),
-        # and _send_final sets it True so a second _finish_turn won't re-fire.
+        # or interim forwarding missed it), deliver the final assistant message.
+        # LOCAL PATCH: nestřílí se hned, jen se to naplánuje na BACKSTOP_DELAY dopředu. Okamžitá
+        # kontrola prohrávala závod s běžnou cestou a posílala odpověď podruhé (20. 8. 2026).
         if was_active and self._turn_from_tg and not self._turn_text_sent and self._owner_chat is not None:
-            last = self._last_assistant_text()
-            out = self._strip_marker(last) if last else ""
-            if out:
-                self._send_final(out)
-                log.info("TURN END backstop → forwarded final answer %r", out[:30])
+            self._backstop_due = time.monotonic() + BACKSTOP_DELAY
+            self._backstop_seq = self._turn_seq
         self._turn_active.clear()
         self._pending_turn_end = False
         self._consume_turn_end()
@@ -674,6 +686,26 @@ class AttachBridge:
             log.info("TURN END t=%.2f dur=%.1fs typing_fired=%d max_gap=%.2fs",
                      time.time(), time.monotonic() - self._turn_started,
                      self._typing_count, self._max_gap)
+
+    def _check_backstop(self) -> None:
+        """LOCAL PATCH: odložená záchranná síť, volaná z odchozí smyčky (tedy ze stejného vlákna,
+        které i normálně posílá — žádné souběžné odesílání navíc).
+
+        Vystřelí jen tehdy, když ani po BACKSTOP_DELAY od konce tahu nic neodešlo. Když běžná cesta
+        odpověď mezitím doručila, `_turn_text_sent` je True a síť mlčí. Když mezitím začal nový tah,
+        neshoduje se `_turn_seq` a čekající kontrola propadne."""
+        if self._backstop_due is None or time.monotonic() < self._backstop_due:
+            return
+        self._backstop_due = None
+        if self._backstop_seq != self._turn_seq or self._turn_text_sent:
+            return
+        if not self._turn_from_tg or self._owner_chat is None:
+            return
+        last = self._last_assistant_text()
+        out = self._strip_marker(last) if last else ""
+        if out:
+            self._send_final(out)
+            log.info("TURN END backstop → forwarded final answer %r", out[:30])
 
     def _end_turn(self) -> None:
         # Claude Stop-hook path: catch anything written just before the hook fired, then finish.
@@ -700,6 +732,7 @@ class AttachBridge:
                 elif self._turn_active.is_set() and time.monotonic() - self._last_activity > IDLE_DONE:
                     self._status_clear()
                     self._turn_active.clear()
+                self._check_backstop()        # LOCAL PATCH: odložená síť, až po skončení tahu
                 self._beat()                  # reached only on a full, non-blocking forward cycle
             except Exception as e:
                 log.error("outbound error: %s", e)
