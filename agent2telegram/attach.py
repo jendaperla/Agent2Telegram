@@ -638,9 +638,14 @@ class AttachBridge:
             except OSError:
                 pass
 
-    def _last_assistant_text(self) -> str | None:
+    def _last_assistant_text(self) -> tuple[str, str] | None:
         """The most recent assistant text in the transcript (the turn's final answer). Read-only
-        tail scan — used purely by the turn-end backstop, doesn't touch the live _tpos cursor."""
+        tail scan — used purely by the turn-end backstop, doesn't touch the live _tpos cursor.
+
+        LOCAL PATCH: vrací dvojici `(text, key)`, ne jen text. Klíč je tentýž dedup identifikátor,
+        pod jakým zprávu eviduje běžná cesta (`rec["uuid"]`, jinak hash textu), takže ho záchranná
+        síť může předat do `_send_final` a ledger `attach_sent.txt` zabere i na ni. Bez klíče síť
+        dedup obcházela a uměla poslat už doručenou odpověď podruhé (upstream issue #3)."""
         if not self._transcript:
             return None
         try:
@@ -662,7 +667,7 @@ class AttachBridge:
             try:
                 for ev in self._reader.parse(rec):
                     if ev.kind == "text" and ev.text and ev.text.strip():
-                        last = ev.text
+                        last = (ev.text, ev.key)
             except Exception:
                 continue
         return last
@@ -702,9 +707,17 @@ class AttachBridge:
         if not self._turn_from_tg or self._owner_chat is None:
             return
         last = self._last_assistant_text()
-        out = self._strip_marker(last) if last else ""
+        if not last:
+            return
+        text, key = last
+        # LOCAL PATCH: druhá, na čase nezávislá pojistka. `_turn_text_sent` je jen příznak tahu a
+        # nepozná odpověď doručenou dřív (ani tu z tahu předchozího, když nová ještě není zapsaná
+        # v transcriptu). Ledger drží uuid napříč tahy i restarty, takže tohle chytí obojí.
+        if key and key in self._sent_keys:
+            return
+        out = self._strip_marker(text)
         if out:
-            self._send_final(out)
+            self._send_final(out, key=key)
             log.info("TURN END backstop → forwarded final answer %r", out[:30])
 
     def _end_turn(self) -> None:
