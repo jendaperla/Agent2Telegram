@@ -183,16 +183,20 @@ def _cmd_uninstall(args) -> int:
             pass
     print(f"  stopped {killed} running bridge(s)" if killed else "  no running bridge found")
 
-    # 2) Unregister the Claude Code Stop hook, if the wizard added one.
+    # 2) Unregister the Claude Code hooks (Stop + UserPromptSubmit), if the wizard added them.
     settings = Path.home() / ".claude" / "settings.json"
     try:
         data = json.loads(settings.read_text("utf-8"))
-        stops = data.get("hooks", {}).get("Stop", [])
-        kept = [h for h in stops if "agent2telegram.stop_hook" not in json.dumps(h)]
-        if len(kept) != len(stops):
-            data["hooks"]["Stop"] = kept
+        changed = False
+        for event in ("Stop", "UserPromptSubmit"):
+            entries = data.get("hooks", {}).get(event, [])
+            kept = [h for h in entries if "agent2telegram." not in json.dumps(h)]
+            if len(kept) != len(entries):
+                data["hooks"][event] = kept
+                changed = True
+        if changed:
             settings.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            print(f"  removed the Stop hook from {settings}")
+            print(f"  removed the bridge hooks from {settings}")
     except (OSError, json.JSONDecodeError, KeyError, TypeError):
         pass
 
@@ -241,6 +245,8 @@ def main(argv: list[str] | None = None) -> int:
     nt.add_argument("--config", help="path to a specific bridge config")
     nt.add_argument("--file", action="append",
                     help="attach a file from an outbox folder (repeatable)")
+    sub.add_parser("install-hooks", help="register the Claude Code hooks (Stop + UserPromptSubmit); "
+                                         "idempotent — for installs upgraded without the wizard")
     sub.add_parser("service", help="print a systemd/launchd service unit")
     sub.add_parser("doctor", help="diagnose config and agent availability")
     st = sub.add_parser("selftest", help="end-to-end attach test against a real agent (no bot)")
@@ -269,6 +275,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_run(args)
     if args.command == "notify":
         return _cmd_notify(args)
+    if args.command == "install-hooks":
+        from . import wizard
+        wizard._register_claude_hook()
+        return 0
     if args.command == "service":
         from . import service
         return service.print_instructions()

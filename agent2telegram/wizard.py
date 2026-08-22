@@ -205,23 +205,35 @@ def _capture_owner_id(token: str, bot_username: str) -> int | None:
     return int(manual) if manual.isdigit() else None
 
 
-# ---------------------------------------------------------------- Claude Stop hook
+# ---------------------------------------------------------------- Claude hooks
+#: (settings.json event, module run as the hook command). Stop marks end-of-turn;
+#: UserPromptSubmit pins the transcript the driven session writes (see prompt_hook.py).
+_CLAUDE_HOOKS = (("Stop", "agent2telegram.stop_hook"),
+                 ("UserPromptSubmit", "agent2telegram.prompt_hook"))
+
+
 def _register_claude_hook() -> None:
-    """Add the end-of-turn Stop hook to ~/.claude/settings.json (idempotent, non-destructive)."""
+    """Add both bridge hooks to ~/.claude/settings.json (idempotent, non-destructive).
+    Also exposed as `agent2telegram install-hooks`, so existing installs can register the
+    UserPromptSubmit hook without re-running the wizard."""
     settings = Path.home() / ".claude" / "settings.json"
-    cmd = f"{sys.executable} -m agent2telegram.stop_hook"
     try:
         data = json.loads(settings.read_text("utf-8")) if settings.exists() else {}
-        hooks = data.setdefault("hooks", {}).setdefault("Stop", [])
-        already = json.dumps(hooks).find("agent2telegram.stop_hook") != -1
-        if not already:
-            hooks.append({"matcher": "", "hooks": [{"type": "command", "command": cmd, "timeout": 15}]})
+        changed = False
+        for event, module in _CLAUDE_HOOKS:
+            cmd = f"{sys.executable} -m {module}"
+            hooks = data.setdefault("hooks", {}).setdefault(event, [])
+            if json.dumps(hooks).find(module) == -1:
+                hooks.append({"matcher": "", "hooks": [{"type": "command", "command": cmd, "timeout": 15}]})
+                changed = True
+        if changed:
             settings.parent.mkdir(parents=True, exist_ok=True)
             settings.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        print(f"  ✓ Stop hook registered in {settings}")
+        print(f"  ✓ Stop + UserPromptSubmit hooks registered in {settings}")
     except (OSError, json.JSONDecodeError) as e:
-        print(f"  ⚠️  Couldn't auto-register the Stop hook ({e}). Add this to {settings} under "
-              f'hooks.Stop manually:\n      {{"type":"command","command":"{cmd}"}}')
+        print(f"  ⚠️  Couldn't auto-register the Claude hooks ({e}). Add entries running "
+              f"'{sys.executable} -m <module>' to {settings} under hooks.<event> for: "
+              + ", ".join(f"{ev}→{mod}" for ev, mod in _CLAUDE_HOOKS))
 
 
 # ---------------------------------------------------------------- run
@@ -421,6 +433,7 @@ def connect(name: str | None = None) -> int:
         origin_prefix="[TG] ",
         progress_marker="[TG]",
         claude_session_id=(_claude_session_id_for(session) if agent_cls.name == "claude-code" else ""),
+        session_cwd=_session_cwd(session) or "",
         bot_username=me.get("username", ""),
     )
     path = save(cfg, cfg_path)

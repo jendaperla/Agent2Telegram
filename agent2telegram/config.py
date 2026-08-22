@@ -50,6 +50,7 @@ class Config:
     transcript_path: str = ""           # agent transcript to tail for interim updates
     origin_prefix: str = "Telegram:"    # injected before each message; hook forwards only these
     claude_session_id: str = ""         # guard: only act on this session's transcript
+    session_cwd: str = ""               # cwd of the driven tmux session; scopes hook pins to it
     progress_marker: str = "[tg]"       # lines starting with this are sent live (interim)
     bot_username: str = ""              # the bot's @username (non-secret; for t.me/ deep links)
     # Directories the agent may send files FROM (see `file_marker`). Deliberately narrow:

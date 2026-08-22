@@ -31,6 +31,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import adapters
+from . import prompt_hook
 from . import readers
 from . import tts
 from .compat import AlreadyRunning, single_instance_lock
@@ -227,6 +228,18 @@ class AttachBridge:
         # long thinking and off exactly at turn end). Codex needs none — its rollout records
         # task_complete, so the reader signals turn end directly.
         self._turn_end = (self._signal.parent / "turn_end") if self._signal else None
+        # Claude Code only: the UserPromptSubmit hook records ("pins") the transcript the driven
+        # session is actually writing (see prompt_hook.py). The pin comes from the agent itself,
+        # at the instant our injected message reached it — authoritative, unlike the "newest
+        # .jsonl by mtime" guess, which loses a turn's answer whenever a sibling transcript
+        # (a background-agent session, a /clear leftover) is touched mid-turn. Codex has no
+        # hooks; its pin state stays inert.
+        self._pin_path = (self._signal.parent / prompt_hook.PIN_NAME) \
+            if (self._signal and cfg.agent == "claude-code") else None
+        self._pinned: Path | None = None     # transcript named by the last accepted pin
+        self._pin_stamp = 0.0                # mtime of the pin file we last consumed
+        self._pin_accepted_seq = -1          # turn (_turn_seq) whose first pin we accepted
+        self._hold_logged_seq = -1           # fallback: turn whose mid-turn hold we already logged
         # Outbound-loop heartbeat: touched at the end of every forward cycle (see _outbound_loop).
         # The process and the inbound poller can stay alive while forwarding is wedged — a blocking
         # send or a persistent exception freezes replies silently. A watchdog notices this file go
@@ -396,13 +409,96 @@ class AttachBridge:
                 pass
         return best
 
-    def _maybe_reresolve(self) -> None:
-        """Keep the tailed transcript pointed at our tmux session's own log (auto mode only).
+    def _pin_allowed(self, target: Path) -> bool:
+        """A pin names the file whose content we will forward to Telegram — validate it.
 
-        Agents write the transcript on the first message (not at launch), and a session restart
-        starts a new one — so we re-check periodically. We switch when a better match appears, but
-        never abandon a transcript we're already on for an in-flight turn. A no-op when the config
-        gives an explicit transcript path (the path resolves to itself)."""
+        The pin file is written by our own hook in a 0700 state dir, but defense in depth: the
+        resolved target must live under the Claude projects tree, and when the config knows the
+        driven session's cwd, under THAT project's directory specifically. Resolve first —
+        a lexical prefix check would pass `..` tricks and planted symlinks."""
+        try:
+            resolved = target.resolve()
+        except (OSError, RuntimeError):
+            return False
+        bases = []
+        projects = Path.home() / ".claude" / "projects"
+        cwd = (getattr(self.cfg, "session_cwd", "") or "").strip()
+        if cwd:
+            for c in {cwd, self._norm(cwd)}:
+                bases.append(projects / c.replace("/", "-"))
+        else:
+            bases.append(projects)
+        for b in bases:
+            try:
+                if resolved.is_relative_to(b.resolve()):
+                    return True
+            except (OSError, RuntimeError):
+                continue
+        return False
+
+    def _drain_pin(self) -> bool:
+        """Consume the UserPromptSubmit hook's pin; switch the tailed transcript to it.
+
+        Returns True while the pin is trustworthy — then the mtime heuristic stays off. Not a
+        permanent latch: a stale pin (no turn running, pin file old) yields back to the
+        heuristic, so an unregistered/broken hook can't wedge the bridge forever."""
+        if self._pin_path is None:
+            return False
+        try:
+            stamp = self._pin_path.stat().st_mtime
+        except OSError:
+            return False                          # no pin (yet) → heuristic may run
+        if stamp != self._pin_stamp:
+            self._pin_stamp = stamp
+            target = None
+            try:
+                rec = json.loads(self._pin_path.read_text("utf-8"))
+                target = Path(rec["transcript"]).expanduser()
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+            if target is not None and not self._pin_allowed(target):
+                log.warning("pin rejected (outside project dir): %s", target)
+                target = None
+            if target is not None:
+                # First pin per turn wins. A later, DIFFERENT pin within the same turn is
+                # ignored — our own injected prompt always reaches the session (and fires the
+                # hook) before anything else that turn could. Keyed on _turn_seq, not on
+                # turn_active: the inbound handler activates the turn before the hook can fire,
+                # so "ignore while active" would reject the legitimate post-/clear pin.
+                if self._pin_accepted_seq == self._turn_seq and self._pinned is not None \
+                        and target != self._pinned:
+                    log.info("pin ignored (turn already pinned): %s", target.name)
+                else:
+                    self._pin_accepted_seq = self._turn_seq
+                    self._pinned = target
+                    if target != self._transcript:
+                        log.info("transcript → %s (pinned)", target.name)
+                        self._transcript = target
+                        # The hook fires before the agent creates the file; existence is not
+                        # required — _drain_transcript no-ops until it appears (then _tpos=0
+                        # tails it from the start, which IS the turn being answered).
+                        try:
+                            self._tpos = target.stat().st_size
+                            self._resume_position()   # bounded rewind to the turn's user msg
+                        except OSError:
+                            self._tpos = 0
+        # Trust the pin while a turn runs, or while it is reasonably fresh.
+        if self._pinned is None:
+            return False
+        return self._turn_active.is_set() or (time.time() - self._pin_stamp) < 3600.0
+
+    def _maybe_reresolve(self) -> None:
+        """Keep the tailed transcript pointed at the log our tmux session is really writing.
+
+        Preferred: the UserPromptSubmit hook pins it (exact, from the agent itself). Fallback
+        for installs without the hook: the newest cwd-scoped ``*.jsonl`` — a guess that
+        background-agent sessions (Claude Code ≥ 2.1.232) routinely break. The fallback at
+        least refuses to abandon a transcript it has already forwarded from this turn; a turn
+        that hasn't sent anything yet stays unprotected until its first send — the hook is the
+        real fix, this only narrows the window. A no-op when the config gives an explicit
+        transcript path."""
+        if self._drain_pin():
+            return                                # pin is authoritative — never second-guess it
         if (self.cfg.transcript_path or "").strip().lower() not in ("", "auto"):
             return                                # explicit path → nothing to re-resolve
         now = time.monotonic()
@@ -411,6 +507,12 @@ class AttachBridge:
         self._last_resolve = now
         newest = self._resolve_transcript()
         if not newest or newest == self._transcript:
+            return
+        if self._transcript is not None and self._turn_active.is_set() and self._turn_text_sent:
+            if self._hold_logged_seq != self._turn_seq:
+                self._hold_logged_seq = self._turn_seq
+                log.info("transcript ~ holding %s mid-turn (%s looks newer)",
+                         self._transcript.name, newest.name)
             return
         # cwd-scoped resolution returns OUR session's own log, so follow it even mid-turn: a new
         # rollout for the same session means the current turn is being written THERE. Blocking the
@@ -456,6 +558,19 @@ class AttachBridge:
         self.tg.set_my_commands(BOT_COMMANDS)    # enable the "/" command menu in Telegram
         if not self._session.alive:
             raise RuntimeError(f"tmux session '{self.cfg.tmux_session}' not found")
+        # Backfill session_cwd for configs written before the field existed. The prompt hook
+        # scopes its pins by it, so two Claude bridges on one machine can't cross-deliver;
+        # without the backfill that protection would only start after a manual config edit.
+        if self.cfg.agent == "claude-code" and not (self.cfg.session_cwd or "").strip():
+            cwd = self._session_cwd()
+            if cwd:
+                self.cfg.session_cwd = cwd
+                try:
+                    from .config import save
+                    save(self.cfg)
+                    log.info("config: session_cwd backfilled to %s", cwd)
+                except Exception as e:
+                    log.warning("config: could not persist session_cwd: %s", e)
         # Start tailing at EOF. If we've run before (the ledger has entries), rewind to the start
         # of the current turn so a reply written while we were restarting still gets forwarded —
         # the ledger dedups, so nothing already delivered is re-sent. On the very first run we do
@@ -1925,6 +2040,14 @@ class AttachBridge:
             elif not self._turn_active.is_set():
                 self._turn_from_tg = False
             return
+        if ev.kind == "meta":
+            # Harness-written user record (task-notification, system reminder, compaction
+            # summary…). Mid-turn it must NOT flip the origin — that muted the rest of the turn
+            # (the 21. 8. loss). Between turns it must CLEAR the origin: the agent's unsolicited
+            # reaction to a background result is not an answer to a Telegram message.
+            if not self._turn_active.is_set():
+                self._turn_from_tg = False
+            return
         if ev.kind == "turn_start":
             if not self._turn_active.is_set():
                 self._turn_from_tg = False
@@ -1933,6 +2056,12 @@ class AttachBridge:
             self._pending_turn_end = True       # outbound loop finishes the turn after this drain
             return
         if not self._turn_from_tg or self._owner_chat is None:
+            # Never silently: a dropped reply is undiagnosable after the fact. Reason + key
+            # only — the text of terminal-originated turns is private and stays out of logs.
+            if ev.kind == "text" and ev.text.strip():
+                log.info("DROP text key=%s len=%d — turn not Telegram-originated (%s)",
+                         ev.key or "?", len(ev.text),
+                         self._transcript.name if self._transcript else "?")
             return
         if ev.kind == "text":
             out = self._strip_marker(ev.text)
