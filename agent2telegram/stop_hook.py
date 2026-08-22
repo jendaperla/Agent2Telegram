@@ -51,6 +51,23 @@ def _all_cfgs() -> list[dict]:
     return out
 
 
+def _read_pin(signal: str) -> str | None:
+    """The transcript the UserPromptSubmit hook pinned for this bridge, or None (no pin)."""
+    try:
+        from .prompt_hook import PIN_NAME
+        raw = (Path(signal).parent / PIN_NAME).read_text("utf-8")
+        return json.loads(raw).get("transcript") or None
+    except (OSError, ValueError):
+        return None
+
+
+def _same_file(a: str, b: str) -> bool:
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except (OSError, RuntimeError):
+        return a == b
+
+
 def _mark(signal: str) -> None:
     marker = Path(signal).parent / "turn_end"
     try:
@@ -76,11 +93,21 @@ def main() -> None:
         if c.get("signal_file"):
             cfgs = [c]
 
-    # A config with a session guard fires only for ITS session. If none matched (e.g. a single
-    # legacy bridge with no guard), fall back to the guard-less configs — old behaviour preserved.
+    # A config whose bridge has a PIN (the UserPromptSubmit hook recorded which transcript the
+    # driven session writes) trusts the pin and nothing else: mark only when THIS Stop event is
+    # for the pinned transcript. Background-agent sessions fire Stop hooks too (Claude Code
+    # ≥ 2.1.232) — without this, any of them would end the bridge's turn mid-work and the
+    # backstop could ship a stale answer. Configs without a pin keep the legacy behaviour:
+    # session-id guard, then guard-less fallback.
     matched = False
     guardless = []
     for c in cfgs:
+        pinned = _read_pin(c["signal_file"])
+        if pinned is not None:
+            if _same_file(path, pinned):
+                _mark(c["signal_file"])
+                matched = True
+            continue                    # pinned bridge never falls back to the guard paths
         guard = c.get("claude_session_id", "")
         if guard:
             if base.startswith(guard):

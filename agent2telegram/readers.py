@@ -31,7 +31,7 @@ from dataclasses import dataclass
 
 @dataclass
 class Ev:
-    kind: str               # turn_start | user | text | tool | turn_end
+    kind: str               # turn_start | user | meta | text | tool | turn_end
     text: str = ""          # message / tool-summary text
     key: str = ""           # stable dedup id (text uuid/hash, tool call id)
     final: bool = False      # for 'text': hint that this is the final answer
@@ -73,6 +73,28 @@ def _claude_tool_summary(name: str, inp: dict) -> str:
     return "🛠️ " + _short(name or "tool")
 
 
+#: User records the harness writes on Claude's behalf — background-task results, system
+#: reminders, slash-command echoes, compaction summaries. They look exactly like real user
+#: messages in the transcript (no reliable flag: task-notifications carry no isMeta), but they
+#: must never decide whether a turn is Telegram-originated: since Claude Code 2.1.234 a
+#: `<task-notification>` lands MID-TURN whenever a background task finishes, and treating it
+#: as "the user spoke" muted the rest of the turn — final answer included.
+_SYNTHETIC_PREFIXES = (
+    "<task-notification>",
+    "<system-reminder>",
+    "<local-command-stdout>",
+    "<local-command-caveat>",
+    "<command-name>",
+    "This session is being continued",     # compaction summary
+)
+
+
+def _is_synthetic_user(rec: dict, text: str) -> bool:
+    if rec.get("isMeta") or rec.get("isCompactSummary"):
+        return True
+    return text.lstrip().startswith(_SYNTHETIC_PREFIXES)
+
+
 def _text_of(content) -> str:
     if isinstance(content, str):
         return content
@@ -93,14 +115,20 @@ class ClaudeCodeReader:
     def user_text(self, rec: dict) -> str | None:
         if rec.get("type") != "user":
             return None
-        return _text_of(rec.get("message", {}).get("content"))
+        t = _text_of(rec.get("message", {}).get("content"))
+        if t and _is_synthetic_user(rec, t):
+            return None                 # harness-written record — says nothing about origin
+        return t
 
     def parse(self, rec: dict):
         typ = rec.get("type")
         if typ == "user":
             t = _text_of(rec.get("message", {}).get("content"))
             if t.strip():
-                yield Ev("user", text=t)
+                if _is_synthetic_user(rec, t):
+                    yield Ev("meta")    # harness-written — must not flip the turn's origin
+                else:
+                    yield Ev("user", text=t)
             return
         if typ != "assistant":
             return
