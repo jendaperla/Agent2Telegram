@@ -73,6 +73,8 @@ class _Env:
         b.cfg.transcript_path = "auto"
         b.cfg.tmux_session = "t"
         b.cfg.session_cwd = str(self.work) if session_cwd is None else session_cwd
+        b.cfg.file_marker = ""          # upstream _send_final reads it; "" skips extraction
+        b.cfg.voice_replies = False
         b._reader = readers.ClaudeCodeReader()
         b.tg = _FakeTG()
         b._owner_chat = 42
