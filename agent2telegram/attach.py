@@ -204,6 +204,11 @@ def _in_test_run() -> bool:
 
 class AttachBridge:
     _turn_end_backstop_enabled = True
+    #: Per-turn counter keying the pin/hold bookkeeping. A class default so objects built
+    #: without __init__ (focused tests) can still enter _begin_turn.
+    _turn_seq = 0
+    _pin_accepted_seq = -1
+    _hold_logged_seq = -1
     #: Durable outbox with per-part confirmation. Off by default for objects built without
     #: __init__ (focused tests), which have no queue path to write to.
     _use_durable_outbox = True
@@ -1982,13 +1987,13 @@ class AttachBridge:
         """
         resolved, reason = self._safe_outbox_path(raw)
         if resolved is None:
-            self._ohlas_trvale_odmitnuti(Path(raw).name, reason)
+            self._report_permanent_refusal(Path(raw).name, reason)
             return
         try:
             self.tg.send_file(self._owner_chat, resolved)
         except OSError as e:
             # The file vanished or can't be read — retrying won't fix it.
-            self._ohlas_trvale_odmitnuti(resolved.name, str(e))
+            self._report_permanent_refusal(resolved.name, str(e))
         # Other errors (including TelegramError) are let out as transient. Classifying them
         # binarily proved a trap: an unclear error would either be dropped (message loss) or
         # retried forever (a clogged FIFO queue blocking every later reply — finding F2).
