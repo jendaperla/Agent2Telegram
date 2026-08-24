@@ -240,6 +240,7 @@ class AttachBridge:
         self._pin_stamp = 0.0                # mtime of the pin file we last consumed
         self._pin_accepted_seq = -1          # turn (_turn_seq) whose first pin we accepted
         self._hold_logged_seq = -1           # fallback: turn whose mid-turn hold we already logged
+        self._turn_seq = 0                   # increments per Telegram turn; keys the pin/hold bookkeeping
         # Outbound-loop heartbeat: touched at the end of every forward cycle (see _outbound_loop).
         # The process and the inbound poller can stay alive while forwarding is wedged — a blocking
         # send or a persistent exception freezes replies silently. A watchdog notices this file go
@@ -1335,6 +1336,7 @@ class AttachBridge:
         self._max_gap = 0.0
         self._last_typing = now
         self._turn_text_sent = False             # gate TUI bubbles until intro text lands
+        self._turn_seq += 1                      # new turn invalidates per-turn pin/hold bookkeeping
         self._turn_is_reaction = False           # set by the reaction branch right after this
         # Clear any end-of-turn signal left over from the PREVIOUS turn. Codex writes
         # task_complete to the rollout with a delay, so a late one could land after the next
