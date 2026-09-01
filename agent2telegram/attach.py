@@ -1481,7 +1481,8 @@ class AttachBridge:
                 "progress, what tools it runs, and the reply. You can also send *photos* and "
                 "*files*, and react with ❤️ as quick feedback.\n\n"
                 f"🎤 Voice transcription: {voice}.\n\n"
-                "Commands: /help · /status · /id · /setkey · /voice")
+                "Commands: /help · /status · /id · /setkey · /voice"
+                + "".join(f" · /{c}" for c in sorted(self.cfg.shell_commands)))
             return True
         if cmd == "id":
             self.tg.send_message(chat_id, f"Your Telegram id: `{chat_id}`")
@@ -1498,7 +1499,31 @@ class AttachBridge:
             return self._set_voice_key(arg, chat_id, message_id)
         if cmd == "voice":
             return self._toggle_voice(chat_id)
+        if cmd in self.cfg.shell_commands:
+            return self._run_shell_command(cmd, chat_id)
         return False    # unknown command → let the agent handle it
+
+    def _run_shell_command(self, cmd: str, chat_id: int) -> bool:
+        """Run a config-defined shell command and reply with its output.
+
+        No agent turn: this answers instantly even while the agent is busy. Errors and
+        non-zero exits are reported, never swallowed — a broken command must look broken.
+        """
+        line = self.cfg.shell_commands[cmd]
+        try:
+            r = subprocess.run(line, shell=True, capture_output=True, text=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            self.tg.send_message(chat_id, f"⏱ /{cmd} timed out after 60 s")
+            return True
+        except Exception as e:  # noqa: BLE001 — bridge must not die on a bad command
+            self.tg.send_message(chat_id, f"✗ /{cmd} failed: {type(e).__name__}: {e}")
+            return True
+        out = (r.stdout or "").strip() or (r.stderr or "").strip() or "(no output)"
+        if len(out) > 3500:
+            out = out[:3500] + "\n… (truncated)"
+        prefix = "" if r.returncode == 0 else f"✗ /{cmd} exit {r.returncode}\n"
+        self.tg.send_message(chat_id, f"{prefix}```\n{out}\n```")
+        return True
 
     # ---- voice-reply mode ----------------------------------------------------
     def _load_voice_state(self) -> bool:

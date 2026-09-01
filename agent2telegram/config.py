@@ -43,6 +43,11 @@ class Config:
     elevenlabs_api_key: str = ""        # optional: enables voice-message transcription (STT)
     tts_voice_id: str = "XB0fDUnXU5powFXDhCwa"   # ElevenLabs voice for /voice replies (Charlotte)
     tts_model_id: str = "eleven_v3"  # v3: better numeral accuracy, steadier generation, multilingual
+    # Extra bridge-level /commands: {"name": "shell command line"}. The bridge runs the
+    # command locally and replies with its output — no agent turn involved. The command
+    # line comes from THIS config file (owner-writable, trusted); the Telegram user only
+    # picks WHICH predefined command runs, never WHAT it is.
+    shell_commands: dict[str, str] = field(default_factory=dict)
     # ---- persistent "attach" mode (drive an existing live agent session) ----
     mode: str = "oneshot"               # "oneshot" | "attach"
     tmux_session: str = ""              # name of the existing tmux session to drive
