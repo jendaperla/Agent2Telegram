@@ -87,7 +87,18 @@ else
     GIT_TERMINAL_PROMPT=0 git -C "$SRC" pull --ff-only || fetch_tarball || err "Could not fetch the project."
   elif command -v git >/dev/null 2>&1; then
     say "Cloning into $SRC"
-    GIT_TERMINAL_PROMPT=0 git clone --depth 1 "$REPO" "$SRC" 2>/dev/null || fetch_tarball || err "Could not fetch the project."
+    # GitHub answers 401 to anonymous git from datacentre IPs intermittently — the very next
+    # attempt usually succeeds (Hermes' own installer recovers the same way, on try 2 of 4).
+    # Retry before giving up on git, because a real clone is what keeps `update` working;
+    # the tarball is the last resort, not the second choice.
+    n=1
+    while [ "$n" -le 3 ]; do
+      GIT_TERMINAL_PROMPT=0 git clone --depth 1 "$REPO" "$SRC" 2>/dev/null && break
+      rm -rf "$SRC"
+      n=$((n+1))
+      [ "$n" -le 3 ] && { say "Clone refused, retrying ($n/3)"; sleep 2; }
+    done
+    [ -d "$SRC/.git" ] || fetch_tarball || err "Could not fetch the project."
   else
     fetch_tarball || err "Could not fetch the project (no git, and the archive download failed)."
   fi
