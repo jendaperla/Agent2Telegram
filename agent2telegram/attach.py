@@ -2240,6 +2240,7 @@ class AttachBridge:
                 log.warning("downloaded voice/audio too large for STT: %s bytes", len(audio))
                 return None
             return stt.transcribe(audio, api_key=self.cfg.elevenlabs_api_key,
+                                  language=getattr(self.cfg, "elevenlabs_language", "") or None,
                                   filename=Path(fp).name or "voice.ogg")
         except Exception as e:
             log.error("transcription failed: %s", e)

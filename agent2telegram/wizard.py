@@ -480,6 +480,19 @@ def set_elevenlabs(config: str | None = None) -> int:
     if not key:
         print("Nothing entered — aborted.")
         return 1
+    # The same shape check the /setkey chat command already does. It was missing here, and the
+    # web UI hands you a "Copy Key ID" button but no way to re-read the key itself — so pasting
+    # the ID is the easy mistake, and without this it only surfaces later as a bare HTTP 400.
+    from . import stt
+    if not stt.looks_like_api_key(key):
+        print("  ✗ That looks like a key ID, not a key. ElevenLabs keys start with 'sk_' and are")
+        print("    shown only once, when you create or rotate them — the list view can only copy")
+        print("    the ID. Create a new key at elevenlabs.io → Developers → API keys.")
+        return 1
+    # Scribe guesses the language when we don't say. On a short clip it guesses badly: a
+    # three-second Czech note came back as the English word "Down".
+    lang = input("Language code for transcription (blank = auto-detect, e.g. cs, de, en): ").strip()
+    cfg.elevenlabs_language = lang
     cfg.elevenlabs_api_key = key
     mark_secret_from_file(cfg, "elevenlabs_api_key")
     path = save(cfg)
@@ -514,7 +527,37 @@ def set_elevenlabs(config: str | None = None) -> int:
             print("  (no running bridge found — start it and the key will be picked up).")
     except Exception as e:
         print(f"  (restart skipped: {e}) — restart the bridge manually to apply the key.")
+    _also_configure_hermes(key)
     return 0
+
+
+def _also_configure_hermes(key: str) -> None:
+    """Hand the same key to Hermes if it is installed here.
+
+    Hermes runs its own Telegram gateway with its own transcription, so a key set here does
+    nothing for it — someone who set the key once and then found Hermes still deaf would have
+    no way to guess why. One ElevenLabs account, one key: set it in both places.
+
+    Best-effort by design: Hermes not being installed is the normal case, and nothing here may
+    fail the command that already succeeded.
+    """
+    import shutil
+    import subprocess
+    exe = shutil.which("hermes")
+    if not exe:
+        return
+    r = subprocess.run([exe, "config", "set", "--force", "ELEVENLABS_API_KEY", key],
+                       capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        print("  (Hermes found, but setting its key failed — set it with: "
+              "hermes config set ELEVENLABS_API_KEY sk_…)")
+        return
+    print("  ✓ Hermes found on this machine — gave it the same key.")
+    r = subprocess.run([exe, "gateway", "restart"], capture_output=True, text=True, timeout=300)
+    if r.returncode == 0:
+        print("  ✓ Restarted the Hermes gateway so it picks the key up.")
+    else:
+        print("  (restart Hermes yourself to apply it:  hermes gateway restart)")
 
 
 if __name__ == "__main__":   # pragma: no cover

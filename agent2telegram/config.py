@@ -21,6 +21,7 @@ _TOKEN_HINT = ":"
 _SECRET_ENVS = {
     "token": "TELEGRAM_BOT_TOKEN",
     "elevenlabs_api_key": "ELEVENLABS_API_KEY",
+    "elevenlabs_language": "ELEVENLABS_LANGUAGE",
 }
 _SOURCE_ENV = "env"
 _SOURCE_FILE = "file"
@@ -41,6 +42,7 @@ class Config:
     agent_timeout: int = 600            # seconds before a single agent run is killed
     poll_timeout: int = 50              # long-poll timeout for getUpdates
     elevenlabs_api_key: str = ""        # optional: enables voice-message transcription (STT)
+    elevenlabs_language: str = ""       # ISO code (cs, de…); blank = let Scribe auto-detect
     tts_voice_id: str = "XB0fDUnXU5powFXDhCwa"   # ElevenLabs voice for /voice replies (Charlotte)
     tts_model_id: str = "eleven_v3"  # v3: better numeral accuracy, steadier generation, multilingual
     # Extra bridge-level /commands: {"name": "shell command line"}. The bridge runs the
