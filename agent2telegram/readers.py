@@ -155,8 +155,18 @@ class ClaudeCodeReader:
             return any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
         return False
 
+    @staticmethod
+    def _is_harness_record(rec: dict) -> bool:
+        """A ``user`` record the HARNESS wrote, not the person: the compaction summary
+        (``isCompactSummary``), transcript-only notes (``isVisibleInTranscriptOnly``) and meta
+        records (``isMeta``). Treating one as a prompt is the same trap as a tool result: it has
+        no origin prefix, so it reclassified a live Telegram turn as terminal-originated and the
+        real answer that followed was dropped without a log line (2026-09-02 22:25, right after
+        a context compaction)."""
+        return any(rec.get(k) for k in ("isCompactSummary", "isVisibleInTranscriptOnly", "isMeta"))
+
     def user_text(self, rec: dict) -> str | None:
-        if rec.get("type") != "user" or self._is_tool_result(rec):
+        if rec.get("type") != "user" or self._is_tool_result(rec) or self._is_harness_record(rec):
             return None
         t = _text_of(rec.get("message", {}).get("content"))
         if t and _is_synthetic_user(rec, t):
@@ -166,8 +176,8 @@ class ClaudeCodeReader:
     def parse(self, rec: dict):
         typ = rec.get("type")
         if typ == "user":
-            if self._is_tool_result(rec):
-                return                      # a tool result is not something the person typed
+            if self._is_tool_result(rec) or self._is_harness_record(rec):
+                return                      # a tool result / harness note is not something the person typed
             t = _text_of(rec.get("message", {}).get("content"))
             if t.strip():
                 if _is_synthetic_user(rec, t):
