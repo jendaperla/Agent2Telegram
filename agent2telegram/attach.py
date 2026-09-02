@@ -541,6 +541,7 @@ class AttachBridge:
         log.info("transcript → %s", newest.name)
         self._transcript = newest
         self._tpos = 0
+        self._turn_tpos = 0          # the turn-start offset belonged to the previous file
         self._resume_position()
 
     # ---- lifecycle ---------------------------------------------------------
@@ -1698,7 +1699,13 @@ class AttachBridge:
         try:
             size = self._transcript.stat().st_size
             with open(self._transcript, "rb") as f:
-                f.seek(max(0, size - 2_000_000, int(getattr(self, "_turn_tpos", 0) or 0)))
+                start = int(getattr(self, "_turn_tpos", 0) or 0)
+                if start > size:
+                    # The offset is a position in ONE file. A new (or truncated) transcript makes
+                    # it meaningless: seeking past EOF reads nothing and the answer is dropped —
+                    # the very failure this backstop exists to prevent.
+                    start = 0
+                f.seek(max(0, size - 2_000_000, start))
                 tail = f.read()
         except OSError:
             return None
@@ -2090,8 +2097,14 @@ class AttachBridge:
         self._send_files(files)
 
     def _has_marker(self, text: str) -> bool:
-        """True when the FIRST non-blank line starts with the progress marker (case-insensitive)."""
-        marker = self._marker.lower()
+        """True when the FIRST non-blank line starts with the progress marker (case-insensitive).
+
+        An empty marker means "no routing marker configured" everywhere else in this file (see the
+        ``file_marker`` guards), so it must mean the same here. Without this guard every text would
+        start with it, and EVERY answer of a terminal turn would be pushed to the user's phone."""
+        marker = (self._marker or "").lower()
+        if not marker:
+            return False
         for ln in text.splitlines():
             s = ln.strip()
             if s:

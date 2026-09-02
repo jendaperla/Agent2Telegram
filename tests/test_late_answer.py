@@ -123,6 +123,19 @@ class MarkedTextAlwaysRoutesToTelegram(unittest.TestCase):
             self.assertTrue(any("NOT forwarded" in m for m in cm.output),
                             "a dropped text must leave a trace in the log")
 
+    def test_an_empty_marker_forwards_nothing(self):
+        """An empty ``progress_marker`` means "no marker configured", as it does for
+        ``file_marker``. Without the guard every text starts with "" and a terminal turn's whole
+        output would be pushed to the user's phone.
+
+        Mutation: drop the ``if not marker: return False`` guard → local text is forwarded."""
+        with tempfile.TemporaryDirectory() as d:
+            b = _bridge(d)
+            b._marker = ""
+            b._turn_from_tg = False
+            b._handle_event(Ev("text", text="internal terminal work", key="k1"))
+            self.assertEqual(b.tg.sent, [], "an empty marker leaked a local answer to Telegram")
+
     def test_marker_is_only_recognised_at_the_start(self):
         with tempfile.TemporaryDirectory() as d:
             b = _bridge(d)
@@ -165,6 +178,43 @@ class BackstopNeverRecyclesAnOldAnswer(unittest.TestCase):
             b._transcript.write_text(first + _assistant("t2", "[tg] this turn's answer") + "\n", "utf-8")
             self.assertEqual(b._last_assistant_text(), "[tg] this turn's answer")
             self.assertEqual(b._last_backstop_key, "t2")
+
+
+class TurnStartOffsetSurvivesANewTranscript(unittest.TestCase):
+    """The turn-start offset is a position in ONE file. Claude Code opens a new transcript when
+    the session changes, and ``_switch_transcript`` does that mid-turn whenever the cwd is known.
+    The offset then points past the end of a smaller new file, the backstop seeks past EOF, reads
+    nothing — and the answer is dropped. That is the very failure this commit set out to fix,
+    reintroduced in a narrower case.
+
+    Mutation: drop the ``start > size`` clamp in ``_last_assistant_text`` → the answer is lost."""
+
+    def test_answer_in_a_shorter_new_transcript_is_still_found(self):
+        with tempfile.TemporaryDirectory() as d:
+            b = _bridge(d)
+            b._turn_tpos = 900_000                   # offset from the previous, much larger file
+            b._transcript.write_text(_assistant("t9", "[tg] the answer") + "\n", "utf-8")
+            b._turn_active.set()
+            self.assertEqual(b._last_assistant_text(), "[tg] the answer")
+
+
+    def test_switching_transcript_clears_the_turn_start_offset(self):
+        """A new transcript can also be LONGER than the old one, where no clamp helps: the stale
+        offset would then skip the beginning of the new file. Switching must clear it.
+
+        Mutation: drop ``self._turn_tpos = 0`` from ``_maybe_reresolve`` → the offset survives."""
+        with tempfile.TemporaryDirectory() as d:
+            b = _bridge(d)
+            b._turn_tpos = 12_345
+            b.cfg.transcript_path = "auto"
+            b._last_resolve = 0.0
+            novy = Path(d) / "novy.jsonl"
+            novy.write_text(_assistant("t1", "x") + "\n", "utf-8")
+            b._resolve_transcript = lambda: novy
+            b._session_cwd = lambda: str(Path(d))
+            b._maybe_reresolve()
+            self.assertEqual(b._transcript, novy, "the switch itself did not happen")
+            self.assertEqual(b._turn_tpos, 0, "a stale offset from the previous transcript survived")
 
 
 class IdleWindowDependsOnTheHook(unittest.TestCase):
