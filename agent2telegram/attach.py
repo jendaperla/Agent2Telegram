@@ -348,6 +348,17 @@ class AttachBridge:
         except (subprocess.SubprocessError, OSError):
             return None
 
+    def _scoping_cwd(self) -> str | None:
+        """The cwd used to scope transcript resolution, or None when genuinely unknown.
+
+        tmux is the live truth and keeps priority; the stored config is the fallback for the
+        window in which the session is being recreated. `tmux display-message -t <gone>` answers
+        with EMPTY stdout and exit code 0, so that window arrives here as None rather than as an
+        error — which is exactly how a bot ended up tailing another bot's transcript on
+        2026-09-03. Both callers must ask the same question, or the one that still asks tmux
+        alone treats a configured session as unscoped."""
+        return self._session_cwd() or (getattr(self.cfg, "session_cwd", "") or "").strip() or None
+
     @staticmethod
     def _rollout_cwd(path: Path) -> str | None:
         try:
@@ -407,7 +418,7 @@ class AttachBridge:
         up another concurrent Claude session (Claude stores transcripts under a per-cwd project
         dir: ``~/.claude/projects/<cwd-with-slashes-as-dashes>/``)."""
         base = Path.home() / ".claude" / "projects"
-        cwd = self._session_cwd()
+        cwd = self._scoping_cwd()
         dirs: list[Path] = []
         if cwd:
             for c in {cwd, self._norm(cwd)}:
@@ -536,7 +547,7 @@ class AttachBridge:
         # switch while a turn was active caused a ~90s lag (it only switched after the idle timeout)
         # — the first message looked like it took ~2 minutes. Only the cwd-unknown best-effort
         # fallback still avoids jumping away during a live turn.
-        if self._session_cwd() is None and self._transcript is not None and self._turn_active.is_set():
+        if self._scoping_cwd() is None and self._transcript is not None and self._turn_active.is_set():
             return
         log.info("transcript → %s", newest.name)
         self._transcript = newest
