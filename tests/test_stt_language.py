@@ -90,9 +90,14 @@ class HandsKeyToHermes(unittest.TestCase):
             real_shutil.which, real_sub.run = orig_which, orig_run
 
     def test_sets_key_and_restarts_when_hermes_is_present(self):
+        """Asserts WHAT was called, not in which position. Pinning the restart to `calls[1]`
+        broke the moment another setting was added between the key and the restart, even though
+        the behaviour was correct — a test that fails on unrelated additions hides real ones."""
         self._run("/usr/bin/hermes")
-        self.assertTrue(any("ELEVENLABS_API_KEY" in a for a in self.calls[0]))
-        self.assertIn("restart", self.calls[1])
+        self.assertTrue(any("ELEVENLABS_API_KEY" in a for a in self.calls),
+                        "the key was never set")
+        self.assertTrue(any("restart" in a for a in self.calls),
+                        "the gateway was never restarted")
 
     def test_does_nothing_when_hermes_is_absent(self):
         self._run(None)

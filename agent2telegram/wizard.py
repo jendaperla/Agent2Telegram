@@ -572,6 +572,14 @@ def _also_configure_hermes(key: str, language: str = "") -> None:
               "hermes config set ELEVENLABS_API_KEY sk_…)")
         return
     print("  ✓ Hermes found on this machine — gave it the same key.")
+    # Hermes' STT provider defaults to "local" (faster-whisper). Handing it an ElevenLabs key
+    # without switching the provider is a guaranteed no-op: on 2026-09-03 it kept transcribing
+    # Czech speech into English through the local model while the key sat unused. Selecting the
+    # provider is what makes "gave it the same key" actually mean something.
+    if _hermes_set(exe, "stt.provider", "elevenlabs"):
+        print("  ✓ Switched Hermes' transcription to ElevenLabs (it defaults to a local model).")
+    else:
+        print("  (switch it yourself:  hermes config set stt.provider elevenlabs)")
     if language:
         if _hermes_set(exe, "stt.elevenlabs.language_code", language):
             print(f"  ✓ Told Hermes to transcribe in '{language}' too.")

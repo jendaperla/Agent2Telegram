@@ -51,6 +51,15 @@ class HermesGetsTheLanguageToo(unittest.TestCase):
         self.assertEqual(nastaveno.get("stt.elevenlabs.language_code"), "cs")
         self.assertEqual(nastaveno.get("ELEVENLABS_API_KEY"), "sk_test")
 
+    def test_the_provider_is_switched_to_elevenlabs(self):
+        """Hermes' STT provider defaults to "local" (faster-whisper). Without switching it, the
+        key we just handed over is never used at all — which is exactly how Czech speech kept
+        coming back as English.
+
+        Mutation: drop the `stt.provider` call → the key stays unused and nothing changes."""
+        nastaveno = self._spust(force_ok=False, language="cs").nastavene()
+        self.assertEqual(nastaveno.get("stt.provider"), "elevenlabs")
+
     def test_auto_detect_sets_no_language(self):
         """A blank language means auto-detect — writing "" would pin Scribe to nothing.
 
