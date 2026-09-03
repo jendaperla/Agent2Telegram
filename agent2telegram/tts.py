@@ -29,7 +29,7 @@ TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 #: Eleven v3 (out of alpha 2026-08). Multilingual, so the voice follows the CONVERSATION's
 #: language from the text itself. Against v2 it reads numbers more accurately and generates more
 #: steadily (error rate 15.3% -> 4.9%). Speech-to-text (Scribe) is a separate path, unaffected.
-DEFAULT_MODEL_ID = "eleven_v3"
+DEFAULT_MODEL_ID = "eleven_flash_v2_5"
 #: ElevenLabs returns mp3 here; the bridge converts to OGG/OPUS (ffmpeg) before sendVoice.
 DEFAULT_OUTPUT_FORMAT = "mp3_44100_128"
 TRANSIENT_BACKOFFS = (1.0, 3.0)

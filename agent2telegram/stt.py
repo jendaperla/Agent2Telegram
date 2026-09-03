@@ -1,6 +1,6 @@
 """Optional speech-to-text for Telegram voice messages.
 
-Currently supports **ElevenLabs Scribe** (`scribe_v1`). It is enabled only when the user
+Currently supports **ElevenLabs Scribe** (`scribe_v2`). It is enabled only when the user
 provides their own API key (``elevenlabs_api_key`` in config or ``ELEVENLABS_API_KEY`` in
 the environment) — there is no shared/default key and no third-party Python dependency:
 the multipart upload is built by hand on top of ``urllib``.
@@ -19,7 +19,9 @@ import uuid
 log = logging.getLogger("agent2telegram.stt")
 
 ELEVENLABS_URL = "https://api.elevenlabs.io/v1/speech-to-text"
-MODEL_ID = "scribe_v1"
+# scribe_v1 je u ElevenLabs deprecated s doporucenou nahradou v2 a OBA stoji stejne
+# ($0.22/hod, overeno na stránce Model Pricing 2026-09-03), takze v2 je lepsi presnost zadarmo.
+MODEL_ID = "scribe_v2"
 TRANSIENT_BACKOFFS = (1.0, 3.0)
 
 

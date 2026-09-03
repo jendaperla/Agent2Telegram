@@ -194,7 +194,7 @@ in a `cron` line or at the end of a script so the agent tells you when something
 
 ## Voice messages (optional)
 
-Voice notes are transcribed with **ElevenLabs Scribe** (`scribe_v1`) and the transcript is
+Voice notes are transcribed with **ElevenLabs Scribe** (`scribe_v2`) and the transcript is
 sent to the agent. It's **off by default** and uses **your own** API key — there is no shared
 key and no extra Python dependency.
 

@@ -2168,7 +2168,7 @@ class AttachBridge:
                 # Never silently: a dropped reply is undiagnosable after the fact. Reason + key
                 # only — the text of terminal-originated turns is private and stays out of logs.
                 if ev.kind == "text" and ev.text.strip() and ev.key not in self._sent_keys:
-                    log.info("DROP text key=%s len=%d — turn not Telegram-originated (%s)",
+                    log.info("text NOT forwarded (turn not from Telegram) key=%s len=%d (%s)",
                              ev.key or "?", len(ev.text),
                              self._transcript.name if self._transcript else "?")
                 return

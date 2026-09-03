@@ -40,7 +40,7 @@ class LanguageIsSent(unittest.TestCase):
 
     def test_model_is_always_sent(self):
         _, body = self._capture(language="de")
-        self.assertIn("scribe_v1", body)
+        self.assertIn("scribe_v2", body)
 
     def test_dispatcher_passes_the_language_through(self):
         videno = {}

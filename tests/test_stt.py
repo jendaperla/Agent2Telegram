@@ -50,7 +50,7 @@ class STTTests(unittest.TestCase):
         op = _FakeOpener({"text": "x"})
         stt.transcribe_elevenlabs(b"audio", api_key="k", opener=op)
         body = op.last_request.data
-        self.assertIn(b"scribe_v1", body)
+        self.assertIn(b"scribe_v2", body)
         self.assertIn(b'name="file"', body)
         self.assertIn(b"audio", body)
 

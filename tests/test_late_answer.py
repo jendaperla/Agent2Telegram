@@ -75,6 +75,13 @@ def _bridge(tmpdir):
     b._pending_files = []
     b._sent_path = Path(tmpdir) / "sent_uuids"
     b._tpos = 0
+    # fork-only: pin transcriptu od UserPromptSubmit hooku (viz tests/test_pin.py)
+    b._pin_path = Path(tmpdir) / "pin.json"
+    b._pinned = None
+    b._pin_stamp = 0.0
+    b._pin_accepted_seq = -1
+    b._hold_logged_seq = -1
+    b._turn_seq = 0
     return b
 
 

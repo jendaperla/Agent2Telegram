@@ -44,7 +44,7 @@ class Config:
     elevenlabs_api_key: str = ""        # optional: enables voice-message transcription (STT)
     elevenlabs_language: str = ""       # ISO code (cs, de…); blank = let Scribe auto-detect
     tts_voice_id: str = "XB0fDUnXU5powFXDhCwa"   # ElevenLabs voice for /voice replies (Charlotte)
-    tts_model_id: str = "eleven_v3"  # v3: better numeral accuracy, steadier generation, multilingual
+    tts_model_id: str = "eleven_flash_v2_5"  # pulka ceny v3 ($0.05 vs $0.10 / 1k znaku), limit 40k misto 5k
     # Extra bridge-level /commands: {"name": "shell command line"}. The bridge runs the
     # command locally and replies with its output — no agent turn involved. The command
     # line comes from THIS config file (owner-writable, trusted); the Telegram user only
