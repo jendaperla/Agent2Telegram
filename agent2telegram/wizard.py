@@ -527,32 +527,57 @@ def set_elevenlabs(config: str | None = None) -> int:
             print("  (no running bridge found — start it and the key will be picked up).")
     except Exception as e:
         print(f"  (restart skipped: {e}) — restart the bridge manually to apply the key.")
-    _also_configure_hermes(key)
+    _also_configure_hermes(key, cfg.elevenlabs_language)
     return 0
 
 
-def _also_configure_hermes(key: str) -> None:
-    """Hand the same key to Hermes if it is installed here.
+def _hermes_set(exe: str, klic: str, hodnota: str) -> bool:
+    """`hermes config set <key> <value>`, tolerating both CLI generations.
+
+    Older builds reject `--force` outright ("unrecognized arguments"), newer ones want it to
+    overwrite an existing value. Trying the documented form first and falling back keeps this
+    working on whatever the user installed."""
+    import subprocess
+    for argv in ([exe, "config", "set", klic, hodnota],
+                 [exe, "config", "set", "--force", klic, hodnota]):
+        try:
+            r = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        except Exception:
+            return False
+        if r.returncode == 0 and "unrecognized arguments" not in (r.stderr or ""):
+            return True
+    return False
+
+
+def _also_configure_hermes(key: str, language: str = "") -> None:
+    """Hand the same key AND the same language to Hermes if it is installed here.
 
     Hermes runs its own Telegram gateway with its own transcription, so a key set here does
     nothing for it — someone who set the key once and then found Hermes still deaf would have
     no way to guess why. One ElevenLabs account, one key: set it in both places.
 
+    The language matters just as much and used to be left out: Hermes then transcribed Czech
+    speech into ENGLISH text (2026-09-03), which looks like a broken transcriber rather than a
+    missing setting. Its key is `stt.elevenlabs.language_code`.
+
     Best-effort by design: Hermes not being installed is the normal case, and nothing here may
     fail the command that already succeeded.
     """
     import shutil
-    import subprocess
     exe = shutil.which("hermes")
     if not exe:
         return
-    r = subprocess.run([exe, "config", "set", "--force", "ELEVENLABS_API_KEY", key],
-                       capture_output=True, text=True, timeout=60)
-    if r.returncode != 0:
+    if not _hermes_set(exe, "ELEVENLABS_API_KEY", key):
         print("  (Hermes found, but setting its key failed — set it with: "
               "hermes config set ELEVENLABS_API_KEY sk_…)")
         return
     print("  ✓ Hermes found on this machine — gave it the same key.")
+    if language:
+        if _hermes_set(exe, "stt.elevenlabs.language_code", language):
+            print(f"  ✓ Told Hermes to transcribe in '{language}' too.")
+        else:
+            print(f"  (set Hermes' language yourself:  hermes config set "
+                  f"stt.elevenlabs.language_code {language})")
     r = subprocess.run([exe, "gateway", "restart"], capture_output=True, text=True, timeout=300)
     if r.returncode == 0:
         print("  ✓ Restarted the Hermes gateway so it picks the key up.")
