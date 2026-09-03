@@ -75,6 +75,10 @@ class HermesGetsTheLanguageToo(unittest.TestCase):
         nastaveno = self._spust(force_ok=False, language="").nastavene()
         self.assertNotIn("stt.elevenlabs.language_code", nastaveno)
         self.assertEqual(nastaveno.get("ELEVENLABS_API_KEY"), "sk_test")
+        # …but the LOCAL transcriber must still be told, because its default is "en", not
+        # auto-detect. Leaving it alone would turn "auto-detect" into "English".
+        # Mutation: skip the local setter on a blank language → auto-detect means English.
+        self.assertEqual(nastaveno.get("stt.local.language"), "")
 
     def test_works_on_a_build_that_rejects_force(self):
         """The older CLI answers `--force` with "unrecognized arguments" and exit 2.
