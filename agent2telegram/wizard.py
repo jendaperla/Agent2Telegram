@@ -581,6 +581,11 @@ def _also_configure_hermes(key: str, language: str = "") -> None:
     else:
         print("  (switch it yourself:  hermes config set stt.provider elevenlabs)")
     if language:
+        # Belt and braces: Hermes' LOCAL transcriber is hard-defaulted to English
+        # (DEFAULT_LOCAL_STT_LANGUAGE = "en"), not to auto-detect. Anyone whose build ignores
+        # the provider switch, or who later switches back to local, would otherwise keep getting
+        # fluent English out of Czech speech and have no way to guess why.
+        _hermes_set(exe, "stt.local.language", language)
         if _hermes_set(exe, "stt.elevenlabs.language_code", language):
             print(f"  ✓ Told Hermes to transcribe in '{language}' too.")
         else:

@@ -60,6 +60,14 @@ class HermesGetsTheLanguageToo(unittest.TestCase):
         nastaveno = self._spust(force_ok=False, language="cs").nastavene()
         self.assertEqual(nastaveno.get("stt.provider"), "elevenlabs")
 
+    def test_the_local_transcriber_gets_the_language_too(self):
+        """Hermes' local transcriber defaults to "en", not to auto-detect, so a build that
+        ignores the provider switch keeps turning Czech into English.
+
+        Mutation: drop the `stt.local.language` call → that fallback stays English."""
+        nastaveno = self._spust(force_ok=False, language="cs").nastavene()
+        self.assertEqual(nastaveno.get("stt.local.language"), "cs")
+
     def test_auto_detect_sets_no_language(self):
         """A blank language means auto-detect — writing "" would pin Scribe to nothing.
 
