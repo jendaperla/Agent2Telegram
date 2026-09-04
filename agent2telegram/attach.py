@@ -35,6 +35,9 @@ from . import prompt_hook
 from . import readers
 from . import tts
 from .compat import AlreadyRunning, single_instance_lock
+import re
+
+_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 from .config import Config, _state_dir
 from .durable import DurableInbox, DurableOutbox
 from .session import SessionError, TmuxSession
@@ -403,6 +406,46 @@ class AttachBridge:
         sc = self._session_cwd()
         return bool(sc) and self._norm(self._rollout_cwd(rollout)) == self._norm(sc)
 
+    def _session_uuid(self) -> str | None:
+        """The Codex session id the driven tmux session was launched with (``codex resume <id>``
+        on its command line), or None for a fresh session that has no id yet.
+
+        The cwd is not enough to tell sessions apart: every agent on a box tends to run from the
+        same home directory, so when a *sibling* agent restarted, its rollout became the newest
+        one "for our cwd" and the bridge tailed the wrong session (2026-09-04: Sol's bridge
+        followed Longevity's rollout for ten minutes, then jumped back and replayed 22 old
+        messages as the answer to "jsi tam?")."""
+        try:
+            out = subprocess.run(
+                ["tmux", "list-panes", "-t", self.cfg.tmux_session, "-F", "#{pane_pid}"],
+                capture_output=True, text=True, timeout=5)
+            pids = {int(x) for x in out.stdout.split() if x.isdigit()}
+            if not pids:
+                return None
+            ps = subprocess.run(["ps", "-axo", "pid=,ppid=,command="],
+                                capture_output=True, text=True, timeout=5)
+        except (subprocess.SubprocessError, OSError, ValueError):
+            return None
+        rows = []
+        for ln in ps.stdout.splitlines():
+            parts = ln.split(None, 2)
+            if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+                rows.append((int(parts[0]), int(parts[1]), parts[2]))
+        # Walk the pane's process tree (shell → codex) looking for a resume id on argv.
+        family = set(pids)
+        grew = True
+        while grew:
+            grew = False
+            for pid, ppid, _ in rows:
+                if ppid in family and pid not in family:
+                    family.add(pid); grew = True
+        for pid, _, cmd in rows:
+            if pid in family and "codex" in cmd:
+                m = readers.UUID_RE.search(cmd) if hasattr(readers, "UUID_RE") else _UUID_RE.search(cmd)
+                if m:
+                    return m.group(0).lower()
+        return None
+
     def _newest_rollout(self) -> Path | None:
         base = self._codex_sessions_dir()
         files = (glob.glob(str(base / "**" / "rollout-*.jsonl"), recursive=True)
@@ -413,6 +456,11 @@ class AttachBridge:
             files.sort(key=lambda f: Path(f).stat().st_mtime, reverse=True)
         except OSError:
             return None
+        sid = self._session_uuid()
+        if sid:
+            own = [f for f in files if sid in os.path.basename(f).lower()]
+            if own:
+                return Path(own[0])               # the session's own rollout, whatever its mtime
         cwd = self._norm(self._session_cwd())
         if cwd:
             for f in files:                       # newest first → our session's own rollout
@@ -572,9 +620,60 @@ class AttachBridge:
             return
         log.info("transcript → %s", newest.name)
         self._transcript = newest
-        self._tpos = 0
-        self._turn_tpos = 0          # the turn-start offset belonged to the previous file
-        self._resume_position()
+        self._seek_to_turn()
+
+    def _seek_to_turn(self) -> None:
+        """Position the cursor in a freshly adopted transcript so that only the CURRENT turn is
+        read from it. Everything already in the file is history — a resumed session replays its
+        whole past, and starting at byte 0 forwarded 22 old messages as one answer (2026-09-04).
+
+        Outside a turn: start at the end. Inside a turn: start at the first record stamped at or
+        after the turn began (records carry a wall-clock ``timestamp``); if nothing in the file is
+        that new yet, start at the end and let the drain pick the answer up as it is written."""
+        try:
+            size = self._transcript.stat().st_size
+        except OSError:
+            size = 0
+        pos = size
+        if self._turn_active.is_set():
+            t0 = float(getattr(self, "_turn_started_wall", 0.0) or 0.0) - 2.0
+            start = max(0, size - 5_000_000)
+            try:
+                with open(self._transcript, "rb") as f:
+                    f.seek(start)
+                    tail = f.read()
+            except OSError:
+                tail = b""
+            cur = start
+            for raw in tail.split(b"\n"):
+                line_end = cur + len(raw) + 1
+                ts = self._record_epoch(raw)
+                if ts is not None and ts >= t0:
+                    pos = cur
+                    break
+                cur = line_end
+        self._tpos = pos
+        self._turn_tpos = pos
+
+    @staticmethod
+    def _record_epoch(raw: bytes) -> float | None:
+        """Wall-clock time of a transcript record (Codex and Claude Code both write an ISO
+        ``timestamp``), or None when the line has none."""
+        try:
+            rec = json.loads(raw.decode("utf-8", "ignore"))
+        except (ValueError, json.JSONDecodeError):
+            return None
+        ts = rec.get("timestamp") if isinstance(rec, dict) else None
+        if not isinstance(ts, str) or not ts:
+            return None
+        from datetime import datetime, timezone
+        try:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
 
     # ---- lifecycle ---------------------------------------------------------
     def run(self) -> None:
@@ -1403,6 +1502,7 @@ class AttachBridge:
         self._turn_from_tg = True
         self._last_activity = now
         self._turn_started = now
+        self._turn_started_wall = time.time()   # records are stamped with wall-clock time
         self._typing_count = 1
         self._max_gap = 0.0
         self._last_typing = now

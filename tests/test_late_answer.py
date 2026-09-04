@@ -221,7 +221,8 @@ class TurnStartOffsetSurvivesANewTranscript(unittest.TestCase):
             b._session_cwd = lambda: str(Path(d))
             b._maybe_reresolve()
             self.assertEqual(b._transcript, novy, "the switch itself did not happen")
-            self.assertEqual(b._turn_tpos, 0, "a stale offset from the previous transcript survived")
+            self.assertNotEqual(b._turn_tpos, 12_345, "a stale offset from the previous transcript survived")
+            self.assertLessEqual(b._turn_tpos, novy.stat().st_size, "the offset points past the new file")
 
 
 class IdleWindowDependsOnTheHook(unittest.TestCase):
