@@ -44,7 +44,7 @@ class Config:
     elevenlabs_api_key: str = ""        # optional: enables voice-message transcription (STT)
     elevenlabs_language: str = ""       # ISO code (cs, de…); blank = let Scribe auto-detect
     tts_voice_id: str = "XB0fDUnXU5powFXDhCwa"   # ElevenLabs voice for /voice replies (Charlotte)
-    tts_model_id: str = "eleven_v3"  # v3: better numeral accuracy, steadier generation, multilingual
+    tts_model_id: str = "eleven_turbo_v2_5"  # 2026-09-05: v3 whispered halfway through long notes; turbo v2.5 measured level
     # ---- persistent "attach" mode (drive an existing live agent session) ----
     mode: str = "oneshot"               # "oneshot" | "attach"
     tmux_session: str = ""              # name of the existing tmux session to drive

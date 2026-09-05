@@ -29,7 +29,7 @@ TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 #: Eleven v3 (out of alpha 2026-08). Multilingual, so the voice follows the CONVERSATION's
 #: language from the text itself. Against v2 it reads numbers more accurately and generates more
 #: steadily (error rate 15.3% -> 4.9%). Speech-to-text (Scribe) is a separate path, unaffected.
-DEFAULT_MODEL_ID = "eleven_v3"
+DEFAULT_MODEL_ID = "eleven_turbo_v2_5"   # 2026-09-05: v3/v2 drift into a whisper on long text; turbo measured flat (3 dB range over 150 s)
 #: ElevenLabs returns mp3 here; the bridge converts to OGG/OPUS (ffmpeg) before sendVoice.
 DEFAULT_OUTPUT_FORMAT = "mp3_44100_128"
 TRANSIENT_BACKOFFS = (1.0, 3.0)
@@ -75,7 +75,7 @@ def voice_settings_for(model_id: str) -> dict:
     stability keeps it level; v3 only accepts 0.0 / 0.5 / 1.0 (Creative / Natural / Robust)."""
     if str(model_id or "").startswith("eleven_v3"):
         return {"stability": 1.0, "similarity_boost": 0.8, "use_speaker_boost": True}
-    return {"stability": 0.75, "similarity_boost": 0.8, "style": 0.0, "use_speaker_boost": True}
+    return {"stability": 0.9, "similarity_boost": 0.75, "style": 0.0, "use_speaker_boost": True}
 
 
 def synthesize(text: str, *, api_key: str, voice_id: str, model_id: str = DEFAULT_MODEL_ID,
@@ -125,7 +125,7 @@ def synthesize(text: str, *, api_key: str, voice_id: str, model_id: str = DEFAUL
 # request takes a few thousand characters at most and long single requests are where the
 # alpha v3 model gets flaky, so a long text is spoken in sentence-sized pieces and the
 # caller glues the audio together. Splitting is by SENTENCE, never mid-word.
-LONG_CHUNK_CHARS = 700   # kratší kusy = hlas se v každém startuje znovu, nesjede do šepotu
+LONG_CHUNK_CHARS = 350   # ~20 s of speech per request: measured flat (±1.5 dB) where 700 already sagged 4–7 dB
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 
 
