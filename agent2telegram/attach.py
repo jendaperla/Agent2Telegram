@@ -133,19 +133,34 @@ BOT_COMMANDS = [
 #: phrases speakable text (short, numbers as words, no paths) far better than any post-processing.
 #: Same idea as the "[voice transcript …]" marker on the inbound side.
 VOICE_MODE_HINT = (
-    "[voice mode ON — your reply will be SPOKEN, not read. HARD RULE: keep it under ~20 seconds "
-    "of speech (a few short sentences). The whole point is that the user does not have to read, "
-    "so a long voice note defeats it. Say the one thing that matters; offer details only if asked. "
+    "[voice mode ON — your reply will be SPOKEN, not read. Default: keep it short (a few "
+    "sentences, ~20 seconds), say the one thing that matters and offer details only if asked. "
+    "Exception: when the user explicitly asks for a long narration (a full summary, a whole list, "
+    "a briefing to listen to while driving), speak it in full — up to about five minutes. "
     "Conversational tone, numbers as words, no markdown, tables, code, file paths or URLs.]"
 )
 #: Above this length a reply is sent as TEXT even in voice mode — reading a two-page analysis
 #: aloud is worse than scannable text (and a >~45 s voice note is unwieldy). The agent is asked
 #: to keep spoken replies short; this is the backstop when it doesn't.
-# Ceiling for reading aloud. Raised from 600 (2026-08-01), but it is a BACKSTOP, not a target.
-# The point of voice mode is that the user need not read; a long voice note defeats that just
-# like a long text does. The agent should write SHORTER, not write all the way up to here.
-VOICE_MAX_CHARS = 1200
+# Ceiling for reading aloud. 600 → 1200 (2026-08-01) → 6000 (2026-09-05, Petr: "klidně pět
+# minut, ať to má délku skoro jako podcast, když řídíme"). Roughly five minutes of Czech speech.
+# Still a BACKSTOP: the hint asks the agent to stay short unless a long narration was requested.
+VOICE_MAX_CHARS = 6000
 
+
+
+def _ogg_duration(path: str) -> int | None:
+    """Length of an audio file in whole seconds via ffprobe; None when unavailable. Passed to
+    sendVoice so Telegram shows the true length of long notes."""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    try:
+        r = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration",
+                            "-of", "csv=p=0", path], capture_output=True, text=True, timeout=30)
+        return int(round(float(r.stdout.strip()))) if r.returncode == 0 and r.stdout.strip() else None
+    except Exception:  # noqa: BLE001 – best effort only
+        return None
 
 import re as _re  # noqa: E402
 from .readers import _short  # noqa: E402
@@ -1702,27 +1717,39 @@ class AttachBridge:
             return False
         try:
             spoken = tts.sanitize_for_speech(text)            # rough safety net only
-            mp3 = tts.synthesize(spoken, api_key=key, voice_id=self.cfg.tts_voice_id,
-                                 model_id=self.cfg.tts_model_id)
+            # Long narrations go in sentence-sized pieces (see tts.synthesize_long); short
+            # replies are a single piece, so nothing changes for them.
+            segments = tts.synthesize_long(spoken, api_key=key, voice_id=self.cfg.tts_voice_id,
+                                           model_id=self.cfg.tts_model_id)
         except Exception as e:
             log.warning("voice reply TTS failed: %s", e)
             return False
         tmpdir = tempfile.mkdtemp(prefix="a2t_voice_")
         try:
-            mp3_path = os.path.join(tmpdir, "reply.mp3")
             ogg_path = os.path.join(tmpdir, "reply.ogg")
-            with open(mp3_path, "wb") as fh:
-                fh.write(mp3)
+            list_path = os.path.join(tmpdir, "parts.txt")
+            with open(list_path, "w", encoding="utf-8") as lst:
+                for i, seg in enumerate(segments):
+                    part = os.path.join(tmpdir, f"part{i:03d}.mp3")
+                    with open(part, "wb") as fh:
+                        fh.write(seg)
+                    lst.write(f"file '{part}'\n")
             # OGG/OPUS is what Telegram wants for a real voice bubble; other formats become a
-            # plain audio attachment. No shell.
+            # plain audio attachment. The pieces are glued with the concat demuxer and 1.5 s of
+            # silence is padded at the end: Petr (2026-09-05) heard the last words of two notes
+            # clipped, and a silent tail costs nothing. No shell.
+            # 48 kHz mono is what Telegram voice notes use natively; 0.7 s of lead-in and 1.5 s
+            # of tail silence protect the first and last words from client-side clipping.
             r = subprocess.run(
-                [ffmpeg, "-y", "-i", mp3_path, "-c:a", "libopus", "-b:a", "32k", ogg_path],
-                capture_output=True, timeout=60,
+                [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", list_path,
+                 "-af", "adelay=700,apad=pad_dur=1.5", "-ar", "48000", "-ac", "1",
+                 "-c:a", "libopus", "-b:a", "48k", "-application", "voip", ogg_path],
+                capture_output=True, timeout=max(60, 30 * len(segments)),
             )
             if r.returncode != 0 or not os.path.exists(ogg_path) or os.path.getsize(ogg_path) == 0:
                 log.warning("voice reply ffmpeg conversion failed (rc=%s)", r.returncode)
                 return False
-            self.tg.send_voice(self._owner_chat, ogg_path)
+            self.tg.send_voice(self._owner_chat, ogg_path, duration=_ogg_duration(ogg_path))
             log.info("FWD (voice) %r", text[:30])
             return True
         except Exception as e:
