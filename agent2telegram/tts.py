@@ -107,3 +107,46 @@ def synthesize(text: str, *, api_key: str, voice_id: str, model_id: str = DEFAUL
         log.warning("ElevenLabs TTS transient failure (%d/%d): %s", attempt + 1, attempts, detail)
         sleeper(retry_backoffs[attempt])
     raise TTSError("ElevenLabs TTS failed")   # pragma: no cover
+
+
+# ── Long narrations (2026-09-05) ─────────────────────────────────────────────────────────
+# Petr: "klidně pět minut, ať to má délku skoro jako podcast, když řídíme". One ElevenLabs
+# request takes a few thousand characters at most and long single requests are where the
+# alpha v3 model gets flaky, so a long text is spoken in sentence-sized pieces and the
+# caller glues the audio together. Splitting is by SENTENCE, never mid-word.
+LONG_CHUNK_CHARS = 2500
+_SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
+
+
+def split_for_tts(text: str, max_chars: int = LONG_CHUNK_CHARS) -> list[str]:
+    """Split *text* into pieces of at most *max_chars*, cutting only at sentence ends (or,
+    for a single over-long sentence, at the last space before the limit). Empty input → []."""
+    if max_chars < 1:
+        raise ValueError("max_chars must be positive")
+    parts: list[str] = []
+    for sentence in _SENTENCE_END.split((text or "").strip()):
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        while len(sentence) > max_chars:                      # one monster sentence
+            cut = sentence.rfind(" ", 0, max_chars)
+            if cut <= 0:
+                cut = max_chars
+            parts.append(sentence[:cut].strip())
+            sentence = sentence[cut:].strip()
+        if parts and len(parts[-1]) + 1 + len(sentence) <= max_chars:
+            parts[-1] = f"{parts[-1]} {sentence}"
+        else:
+            parts.append(sentence)
+    return [p for p in parts if p]
+
+
+def synthesize_long(text: str, *, api_key: str, voice_id: str, model_id: str = DEFAULT_MODEL_ID,
+                    max_chars: int = LONG_CHUNK_CHARS, **kwargs) -> list[bytes]:
+    """Speak a long text as a list of mp3 segments (one per :func:`split_for_tts` piece), in
+    order. The caller concatenates them (ffmpeg). Raises :class:`TTSError` like :func:`synthesize`."""
+    pieces = split_for_tts(text, max_chars=max_chars)
+    if not pieces:
+        raise TTSError("nothing to speak")
+    return [synthesize(piece, api_key=api_key, voice_id=voice_id, model_id=model_id, **kwargs)
+            for piece in pieces]
