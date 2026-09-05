@@ -1560,10 +1560,11 @@ class AttachBridge:
             # silence is padded at the end: Petr (2026-09-05) heard the last words of two notes
             # clipped, and a silent tail costs nothing. No shell.
             # 48 kHz mono is what Telegram voice notes use natively; 0.7 s of lead-in and 1.5 s
-            # of tail silence protect the first and last words from client-side clipping.
+            # of tail silence protect the first and last words from client-side clipping; loudnorm
+            # (EBU R128) keeps the level even across a long note (2026-09-05: whispering half).
             r = subprocess.run(
                 [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", list_path,
-                 "-af", "adelay=700,apad=pad_dur=1.5", "-ar", "48000", "-ac", "1",
+                 "-af", "adelay=700,apad=pad_dur=1.5,loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "48000", "-ac", "1",
                  "-c:a", "libopus", "-b:a", "48k", "-application", "voip", ogg_path],
                 capture_output=True, timeout=max(60, 30 * len(segments)),
             )

@@ -68,6 +68,16 @@ def _describe_error(err: BaseException) -> str:
     return str(err) or err.__class__.__name__
 
 
+
+def voice_settings_for(model_id: str) -> dict:
+    """Steady, full-voice delivery. Petr (2026-09-05) heard a long narration drop into a whisper
+    halfway through: with default settings the voice drifts over long generations. High
+    stability keeps it level; v3 only accepts 0.0 / 0.5 / 1.0 (Creative / Natural / Robust)."""
+    if str(model_id or "").startswith("eleven_v3"):
+        return {"stability": 1.0, "similarity_boost": 0.8, "use_speaker_boost": True}
+    return {"stability": 0.75, "similarity_boost": 0.8, "style": 0.0, "use_speaker_boost": True}
+
+
 def synthesize(text: str, *, api_key: str, voice_id: str, model_id: str = DEFAULT_MODEL_ID,
                output_format: str = DEFAULT_OUTPUT_FORMAT, opener=None, timeout: float = 60,
                retry_backoffs: tuple[float, ...] = TRANSIENT_BACKOFFS,
@@ -78,7 +88,8 @@ def synthesize(text: str, *, api_key: str, voice_id: str, model_id: str = DEFAUL
     if not (text or "").strip():
         raise TTSError("nothing to speak")
     url = TTS_URL.format(voice_id=voice_id) + f"?output_format={output_format}"
-    body = json.dumps({"text": text, "model_id": model_id}).encode("utf-8")
+    body = json.dumps({"text": text, "model_id": model_id,
+                       "voice_settings": voice_settings_for(model_id)}).encode("utf-8")
     req = urllib.request.Request(
         url, data=body,
         headers={"xi-api-key": api_key, "Content-Type": "application/json",
@@ -114,7 +125,7 @@ def synthesize(text: str, *, api_key: str, voice_id: str, model_id: str = DEFAUL
 # request takes a few thousand characters at most and long single requests are where the
 # alpha v3 model gets flaky, so a long text is spoken in sentence-sized pieces and the
 # caller glues the audio together. Splitting is by SENTENCE, never mid-word.
-LONG_CHUNK_CHARS = 2500
+LONG_CHUNK_CHARS = 700   # kratší kusy = hlas se v každém startuje znovu, nesjede do šepotu
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 
 
