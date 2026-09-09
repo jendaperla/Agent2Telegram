@@ -1,10 +1,12 @@
 """Tests for tmux session input handling."""
+import os
 import subprocess
 import unittest
 from unittest.mock import patch
 
 from agent2telegram import session
-from agent2telegram.session import MAX_TMUX_INJECTION_CHARS, SessionError, TmuxSession, sanitize_for_tmux
+from agent2telegram.session import (MAX_TMUX_INJECTION_CHARS, PASTE_MIN_BYTES, SessionError, TmuxSession,
+                                    sanitize_for_tmux)
 
 
 class SanitizeForTmuxTests(unittest.TestCase):
@@ -214,3 +216,59 @@ class TmuxSessionSendKeysTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LongMessagePasteTests(unittest.TestCase):
+    """A long message typed with `send-keys -l` loses its head in Claude Code's TUI (seen 2026-09-09:
+    a 1.7 KB Telegram message arrived without its first ~1 KB, routing prefix included). Long text
+    must therefore go in as ONE bracketed paste through a tmux buffer; short text keeps the proven
+    literal path."""
+
+    def _bare(self):
+        s = object.__new__(TmuxSession)
+        s.name = "a2t-test"
+        s._origin = "[TG] "
+        s._expected_agent_commands = ()
+        return s
+
+    def _run(self, text):
+        loaded = {}
+
+        def tmux(*args, **kwargs):
+            if args and args[0] == "load-buffer":
+                with open(args[-1], encoding="utf-8") as fh:
+                    loaded["content"] = fh.read()
+                loaded["path"] = args[-1]
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+        with patch.object(session, "_tmux", side_effect=tmux) as mocked, \
+             patch.object(session.time, "sleep"), \
+             patch.object(TmuxSession, "_pane_ok", return_value=(True, "")):
+            self._bare()._send_keys(text)
+        return [c.args for c in mocked.call_args_list], loaded
+
+    def test_long_text_goes_in_as_one_bracketed_paste_with_prefix_intact(self):
+        body = "Věta s diakritikou, čárkami a tečkami. " * 40          # ≈ 1.7 KB, like the real case
+        calls, loaded = self._run(body + "\nposlední řádek")
+        names = [c[0] for c in calls]
+        self.assertEqual(names, ["send-keys", "load-buffer", "paste-buffer", "send-keys"])
+        self.assertEqual(calls[0][1:], ("-t", "a2t-test", "C-u"))
+        self.assertEqual(calls[-1][1:], ("-t", "a2t-test", "Enter"))
+        self.assertIn("-p", calls[2])                                     # bracketed paste
+        self.assertIn("-d", calls[2])                                     # buffer deleted after use
+        self.assertEqual(calls[1][2], calls[2][calls[2].index("-b") + 1])  # same buffer name
+        self.assertTrue(loaded["content"].startswith("[TG] Věta s diakritikou"))
+        self.assertEqual(loaded["content"], "[TG] " + body + " poslední řádek")   # whole text, one line
+        self.assertFalse(os.path.exists(loaded["path"]))                   # temp file cleaned up
+
+    def test_short_text_keeps_the_literal_send_keys_path(self):
+        calls, loaded = self._run("✅ krátká zpráva")
+        names = [c[0] for c in calls]
+        self.assertEqual(names, ["send-keys", "send-keys", "send-keys"])
+        self.assertEqual(calls[1][1:], ("-t", "a2t-test", "-l", "--", "[TG] ✅ krátká zpráva"))
+        self.assertEqual(loaded, {})
+
+    def test_threshold_is_measured_in_bytes_not_characters(self):
+        text = "ž" * (PASTE_MIN_BYTES // 2 + 10)      # few characters, but > PASTE_MIN_BYTES bytes
+        calls, _ = self._run(text)
+        self.assertIn("paste-buffer", [c[0] for c in calls])
