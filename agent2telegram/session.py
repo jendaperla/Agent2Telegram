@@ -22,7 +22,9 @@ import logging
 import re
 import shlex
 import shutil
+import os
 import subprocess
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -36,6 +38,12 @@ _STATUS_RE = re.compile(r"^[✻✶✳✢✺✷*]\s")           # spinner/status,
 _BULLET_RE = re.compile(r"^\s*[⏺●○•]\s?")           # assistant output bullet
 
 MAX_TMUX_INJECTION_CHARS = 8000
+# Above this size the text goes in as ONE bracketed paste (tmux load-buffer + paste-buffer -p) instead
+# of a literal send-keys burst. Measured 2026-09-09 against Claude Code: a 1.7 KB message typed with
+# `send-keys -l` reached the agent WITHOUT its first ~1 KB (the routing prefix included) – the TUI's
+# paste detection swallowed the first pty read. A bracketed paste arrives whole; so does chunked typing,
+# but the paste is one atomic operation and keeps the TUI's own "[Pasted text]" handling.
+PASTE_MIN_BYTES = 600
 _SHELL_COMMANDS = {
     "ash", "bash", "csh", "dash", "fish", "ksh", "mksh", "pwsh", "sh", "tcsh", "zsh",
 }
@@ -282,8 +290,27 @@ class TmuxSession:
             text = f"{self._origin}{text}"
         text = sanitize_for_tmux(text)
         _tmux("send-keys", "-t", self.name, "C-u"); time.sleep(0.05)
-        _tmux("send-keys", "-t", self.name, "-l", "--", text); time.sleep(0.15)
+        if len(text.encode("utf-8")) > PASTE_MIN_BYTES:
+            self._paste(text); time.sleep(0.3)
+        else:
+            _tmux("send-keys", "-t", self.name, "-l", "--", text); time.sleep(0.15)
         _tmux("send-keys", "-t", self.name, "Enter")
+
+    def _paste(self, text: str) -> None:
+        """Deliver *text* as one bracketed paste (ESC[200~ … ESC[201~) through a private tmux buffer.
+        The TUI then treats it as a single paste and keeps it whole (see PASTE_MIN_BYTES)."""
+        buf = f"a2t-{os.getpid()}-{time.monotonic_ns()}"
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".a2t", delete=False) as fh:
+            fh.write(text)
+            path = fh.name
+        try:
+            _tmux("load-buffer", "-b", buf, path)
+            _tmux("paste-buffer", "-p", "-d", "-b", buf, "-t", self.name)
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
     def _capture(self) -> str:
         return _tmux("capture-pane", "-p", "-t", self.name, check=False).stdout
