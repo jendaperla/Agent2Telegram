@@ -30,7 +30,7 @@ def _codex_bridge(tmpdir):
     b._turn_active = threading.Event()
     b._turn_from_tg = True
     b._sent_keys = set()
-    b._last_resolve = 0.0
+    b._last_resolve = time.monotonic() - 10.0   # not 0.0: time.monotonic() may start near 0 at process start (Apple Python 3.9), the 3 s guard would skip the re-resolve
     b._tpos = 0
     b._turn_tpos = 0
     return b

@@ -207,7 +207,7 @@ class TurnStartOffsetSurvivesANewTranscript(unittest.TestCase):
             b = _bridge(d)
             b._turn_tpos = 12_345
             b.cfg.transcript_path = "auto"
-            b._last_resolve = 0.0
+            b._last_resolve = time.monotonic() - 10.0   # not 0.0: on this Python time.monotonic() starts near 0 at process start, and the 3 s guard would skip the re-resolve
             novy = Path(d) / "novy.jsonl"
             novy.write_text(_assistant("t1", "x") + "\n", "utf-8")
             b._resolve_transcript = lambda: novy
