@@ -37,6 +37,12 @@ class Ev:
     key: str = ""           # stable dedup id (text uuid/hash, tool call id)
     final: bool = False      # for 'text': hint that this is the final answer
     files: tuple = ()        # for 'files': paths the agent wants delivered to the user
+    #: for 'text'/'tool': the ``stop_reason`` of the assistant record they came from.
+    #: ``end_turn`` means the agent stopped speaking. The bridge needs it to tell a harness
+    #: record that lands BETWEEN turns from one that lands inside a turn it cannot see — a
+    #: terminal-originated turn never sets ``_turn_active``, so that flag cannot answer it.
+    #: Empty when the transcript does not say.
+    stop_reason: str = ""
 
 
 def _short(s: str, n: int = 58) -> str:
@@ -181,20 +187,26 @@ class ClaudeCodeReader:
             t = _text_of(rec.get("message", {}).get("content"))
             if t.strip():
                 if _is_synthetic_user(rec, t):
-                    yield Ev("meta")    # harness-written — must not flip the turn's origin
+                    # Harness-written — must not flip the turn's origin. It carries its text
+                    # because the bridge has to tell the KINDS apart: a `<task-notification>`
+                    # names the background job that finished, and a job a Telegram turn
+                    # dispatched is owed an answer on Telegram.
+                    yield Ev("meta", text=t)
                 else:
                     yield Ev("user", text=t)
             return
         if typ != "assistant":
             return
-        blocks = rec.get("message", {}).get("content")
+        msg = rec.get("message", {})
+        blocks = msg.get("content")
         blocks = blocks if isinstance(blocks, list) else []
+        stop = msg.get("stop_reason") or ""
         # Text first, then tool calls — so a progress message clears the previous bubble before
         # the next call re-creates it below (the bridge relies on this order).
         text = "\n".join(b.get("text", "") for b in blocks
                          if isinstance(b, dict) and b.get("type") == "text").strip()
         if text:
-            yield Ev("text", text=text, key=rec.get("uuid", "") or _hash(text))
+            yield Ev("text", text=text, key=rec.get("uuid", "") or _hash(text), stop_reason=stop)
         for b in blocks:
             if isinstance(b, dict) and b.get("type") == "tool_use":
                 tid = b.get("id")
@@ -204,7 +216,8 @@ class ClaudeCodeReader:
                 if paths:
                     yield Ev("files", key=tid, files=paths)
                     continue                      # not a tool bubble — it is an attachment
-                yield Ev("tool", text=_claude_tool_summary(b.get("name", ""), b.get("input")), key=tid)
+                yield Ev("tool", text=_claude_tool_summary(b.get("name", ""), b.get("input")),
+                         key=tid, stop_reason=stop)
 
 
 # --------------------------------------------------------------------------- Codex

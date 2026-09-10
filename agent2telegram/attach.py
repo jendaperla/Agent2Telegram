@@ -85,6 +85,16 @@ REACTION_DEDUP_S = 60.0
 #: under that window so a turn never shows a gap, even right after a sent message clears it.
 TYPING_INTERVAL = 1.5
 
+#: How many dispatched background jobs we remember per bridge (see `_owed_jobs`). One live
+#: installation made ~1900 tool calls in three weeks, so this holds days of history for a few
+#: kilobytes. Ids are kept, never removed on use: the harness may announce the same job again
+#: if someone resumes it, and a forgotten id would silently restore the very drop we fix.
+OWED_JOBS_MAX = 512
+
+#: The harness names the finished job inside a `<task-notification>` record. Matching this id
+#: against `_owed_jobs` is what makes ownership exact under any interleaving of conversations.
+TASK_NOTIFICATION_PREFIX = "<task-notification>"
+
 # Turn-end backstop: transcript writes can lag the turn-end signal by a fraction of a second
 # (especially after a reset/reconnect), so give the final assistant text a short chance to land.
 BACKSTOP_RETRY_ATTEMPTS = 5
@@ -136,6 +146,11 @@ VOICE_MAX_CHARS = 1200
 
 import re as _re  # noqa: E402
 from .readers import _short  # noqa: E402
+
+#: `<tool-use-id>toolu_…</tool-use-id>` inside a `<task-notification>`. Verified on every
+#: live notifications: the id always equals the `tool_use.id` of the record that dispatched
+#: the work, in the same transcript.
+_TOOL_USE_ID_RE = _re.compile(r"<tool-use-id>\s*([^<\s]+)\s*</tool-use-id>")
 
 #: Codex renders tool activity live in its TUI but only writes it to the rollout at completion.
 #: For Codex (attach), we scrape the tmux pane for these lines so tool bubbles appear LIVE —
@@ -307,6 +322,12 @@ class AttachBridge:
         self._tui_seen: set = set()          # Codex TUI scrape: tool lines already shown this turn
         self._turn_text_sent = False         # has any text been forwarded this turn (bubble gate)
         self._turn_is_reaction = False       # turn opened by a reaction → exempt from the backstop
+        # Background jobs a TELEGRAM turn dispatched, by tool_use id. When the harness later
+        # announces one has finished, the turn it wakes is owed an answer on Telegram — see
+        # _claims_owed_job(). Bounded: ids are never removed (the harness may announce the same
+        # job twice if someone resumes it), so the deque forgets the oldest instead.
+        self._owed_jobs: deque = deque(maxlen=OWED_JOBS_MAX)
+        self._last_stop_reason = ""          # stop_reason of the newest assistant record seen
 
     # ---- transcript resolution --------------------------------------------
     def _codex_sessions_dir(self) -> Path:
@@ -2122,6 +2143,55 @@ class AttachBridge:
                 return s.lower().startswith(marker)
         return False
 
+    def _remember_owed_job(self, tool_use_id: str) -> None:
+        """Record a background job this Telegram turn dispatched, by its ``tool_use`` id.
+
+        Created lazily so a bridge built without ``__init__`` (focused tests do that) behaves
+        like the real one, and so the bound lives in ONE place rather than at every call site.
+        """
+        if not tool_use_id:
+            return
+        owed = getattr(self, "_owed_jobs", None)
+        if owed is None:
+            owed = self._owed_jobs = deque(maxlen=OWED_JOBS_MAX)
+        if tool_use_id not in owed:
+            owed.append(tool_use_id)
+
+    def _claims_owed_job(self, text: str) -> bool:
+        """True when this harness record announces the end of background work that a **Telegram**
+        turn dispatched — so the turn it wakes keeps the Telegram origin and its text is
+        forwarded.
+
+        Ownership is decided per JOB, by the tool_use id, not by the clock and not by "was the
+        last prompt from Telegram". Both of those break under interleaving: the owner can start
+        a job from Telegram, chat about five other things, type one line in the terminal, and
+        the answer to his own job must still reach him. The id survives all of that.
+
+        Two guards, both load-bearing:
+
+        * The record must be a ``<task-notification>``. A compaction summary or a system
+          reminder says nothing about who is owed an answer.
+        * The newest assistant record must have ended the turn (``stop_reason == "end_turn"``).
+          Without this, a notification landing in the MIDDLE of a terminal-originated turn
+          would flip the origin and push the rest of that private turn to Telegram — a new
+          leak in place of a fixed one. ``_turn_active`` cannot stand in for this check: it is
+          set only for turns the bridge injected, so a terminal turn always looks inactive.
+
+        The id is deliberately NOT removed on a match. The harness announces the same job again
+        if someone resumes it, and a consumed id would silently restore the very drop this
+        fixes. `_owed_jobs` is bounded instead (`OWED_JOBS_MAX`).
+        """
+        if not text.lstrip().startswith(TASK_NOTIFICATION_PREFIX):
+            return False
+        if getattr(self, "_last_stop_reason", "") != "end_turn":
+            return False
+        m = _TOOL_USE_ID_RE.search(text)
+        if not m or m.group(1) not in getattr(self, "_owed_jobs", ()):
+            return False
+        log.info("task-notification for a job this Telegram turn dispatched (%s) → the woken "
+                 "turn keeps the Telegram origin", m.group(1))
+        return True
+
     def _strip_marker(self, text: str) -> str:
         """Remove the progress marker (e.g. ``[TG]``) from the start of *any* line. It's a routing
         token, never content — so a stray one mid-message (narration before the marked reply) must
@@ -2154,8 +2224,20 @@ class AttachBridge:
         if ev.kind == "meta":
             # Harness-written user record (task-notification, system reminder, compaction
             # summary…). Mid-turn it must NOT flip the origin — that muted the rest of the turn
-            # (the 21. 8. loss). Between turns it must CLEAR the origin: the agent's unsolicited
+            # (the 21. 8. loss). Between turns it CLEARS the origin: the agent's unsolicited
             # reaction to a background result is not an answer to a Telegram message.
+            #
+            # EXCEPT when the record announces a job THIS bridge's own Telegram turn dispatched.
+            # Then the woken turn is that turn's continuation and the answer is owed to Telegram.
+            # Without this, a subagent's whole report was dropped — the agent reported progress
+            # into the terminal panel while the user, on Telegram, saw only silence.
+            if self._claims_owed_job(ev.text):
+                # SET it; do not merely skip the clear. Between the turn's end and this record
+                # another harness note (a system reminder, a compaction summary) may already
+                # have cleared the flag — that is exactly how the replies of 23. 8. and 2. 9.
+                # were lost. Re-asserting it here makes the rescue independent of them.
+                self._turn_from_tg = True
+                return
             if not self._turn_active.is_set():
                 self._turn_from_tg = False
             return
@@ -2166,6 +2248,12 @@ class AttachBridge:
         if ev.kind == "turn_end":
             self._pending_turn_end = True       # outbound loop finishes the turn after this drain
             return
+        # Track how the newest assistant record ended, BEFORE any gate below returns early —
+        # a terminal-originated turn drops out at the `_turn_from_tg` check, and we still need
+        # to know whether that turn is over. `_turn_active` cannot tell us: it is set only for
+        # turns the bridge itself injected, so a terminal turn always looks "not active".
+        if ev.kind in ("text", "tool") and ev.stop_reason:
+            self._last_stop_reason = ev.stop_reason
         if self._owner_chat is None:
             return
         if not self._turn_from_tg:
@@ -2204,6 +2292,11 @@ class AttachBridge:
         elif ev.kind == "tool":
             if self.cfg.agent == "codex":
                 return                            # Codex tools come live from the TUI scraper
+            # This branch is reached only inside a Telegram turn (the `_turn_from_tg` gate
+            # above), so every tool call seen here was dispatched on the owner's behalf.
+            # Kept clear of the `_seen_tools` guard below because that set means something
+            # else — it is a per-bubble dedup, cleared by every `_status_clear()`.
+            self._remember_owed_job(ev.key)
             if ev.key and ev.key not in self._seen_tools:
                 self._seen_tools.add(ev.key)
                 self._status_push(ev.text)
