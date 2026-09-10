@@ -9,6 +9,7 @@ turn onwards.
 import json
 import os
 import tempfile
+import pathlib
 import threading
 import time
 import unittest
@@ -33,6 +34,16 @@ def _codex_bridge(tmpdir):
     b._last_resolve = 0.0
     b._tpos = 0
     b._turn_tpos = 0
+    # fork-only: pin transcriptu od UserPromptSubmit hooku (viz tests/test_pin.py). Upstreamovy
+    # stub je nezna, takze _maybe_reresolve padal na AttributeError uz v _drain_pin — tataz
+    # trida rozbiti jako po rebasu u tests/test_pin.py a tests/test_late_answer.py (viz 79f7656).
+    b._pin_path = pathlib.Path(tmpdir) / "pin.json"
+    b._pinned = None
+    b._pin_stamp = 0.0
+    b._pin_accepted_seq = -1
+    b._hold_logged_seq = -1
+    b._turn_seq = 0
+    b._signal = None
     return b
 
 
