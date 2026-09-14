@@ -54,6 +54,7 @@ class Config:
     claude_session_id: str = ""         # guard: only act on this session's transcript
     progress_marker: str = "[tg]"       # lines starting with this are sent live (interim)
     bot_username: str = ""              # the bot's @username (non-secret; for t.me/ deep links)
+    require_mention: bool = False        # groups: only @bot mentions / replies to this bot
     # Directories the agent may send files FROM (see `file_marker`). Deliberately narrow:
     # the path comes from the agent's own reply text, so a wide allowlist would turn a
     # prompt-injection into file exfiltration. Empty list = the default outbox only.
@@ -79,6 +80,8 @@ class Config:
         return base
 
     def validate(self) -> None:
+        if not isinstance(self.require_mention, bool):
+            raise ConfigError("'require_mention' must be a boolean.")
         if not self.agent or not isinstance(self.agent, str):
             raise ConfigError("Missing 'agent' (choose: claude-code, codex, generic).")
         if not self.token or _TOKEN_HINT not in self.token:

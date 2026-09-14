@@ -151,6 +151,10 @@ class Bridge:
         user_id = user.get("id")
         text = (msg.get("text") or msg.get("caption") or "").strip()
 
+        from .mentions import accepts_message
+        if not accepts_message(self.cfg, msg):
+            return
+
         if text.startswith("/") and self._handle_command(chat_id, user_id, text):
             return
 
