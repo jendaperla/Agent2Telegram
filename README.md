@@ -239,6 +239,16 @@ accepts only @mentions, commands addressed to that bot, and replies to its messa
 Other group messages are silently ignored, including receipt acknowledgments. Private chats
 are unchanged. The default is `false`; the authorized-user allowlist is always enforced.
 
+Operational notices: `"language": "cs"` translates the busy acknowledgment and the default
+startup notice into Czech (`"en"` is the default; this does not configure speech recognition).
+`"restart_notice": true` enables one short notice after successful bridge startup checks.
+Attach mode sends it to its owner chat; a group adapter can supply its configured group.
+One-shot mode sends it to the first authorized owner. `"restart_notice_text"` optionally
+overrides the text with a literal single line, maximum 200 characters.
+The default is off. A host-state marker enforces a 30-second cooldown across process restarts,
+including failed/uncertain sends. The notice is not retried in a background loop; an uncertain
+Telegram acknowledgement can mean no visible notice. Keep a distinct state directory for each bot.
+
 ---
 
 ## Run it forever (boot + auto‑restart)

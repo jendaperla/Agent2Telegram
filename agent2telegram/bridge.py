@@ -64,6 +64,9 @@ class Bridge:
     # ---- lifecycle ---------------------------------------------------------
     def run(self) -> None:
         me = self._connect()
+        if me and self.cfg.allowed_user_ids:
+            from .notices import restart_notice
+            restart_notice(self, self.cfg.allowed_user_ids[0])
         log.info("Connected as @%s — agent=%s, authorized users=%s",
                  me.get("username"), self.cfg.agent, sorted(self._allowed) or "(none!)")
         if not self._allowed:
