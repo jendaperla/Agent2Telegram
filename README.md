@@ -234,6 +234,11 @@ evolve. Use `{prompt}` where the message should go:
 
 Run `python3 -m agent2telegram doctor` to validate everything (config, token, agent binary).
 
+For groups, optional `"require_mention": true` together with `"bot_username": "your_bot"`
+accepts only @mentions, commands addressed to that bot, and replies to its messages.
+Other group messages are silently ignored, including receipt acknowledgments. Private chats
+are unchanged. The default is `false`; the authorized-user allowlist is always enforced.
+
 ---
 
 ## Run it forever (boot + auto‑restart)

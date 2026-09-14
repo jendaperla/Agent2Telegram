@@ -1495,6 +1495,10 @@ class AttachBridge:
             self.tg.send_message(chat_id, "⛔ Not authorized.")
             return True
 
+        from .mentions import accepts_message
+        if not accepts_message(self.cfg, msg):
+            return True
+
 
         # Bridge-level slash commands (e.g. /start, /help) are answered here instead of being
         # forwarded to the agent — so the first contact is a friendly intro, not the agent
@@ -1565,6 +1569,9 @@ class AttachBridge:
             return
         msg = upd.get("message") or upd.get("edited_message") or {}
         if msg.get("from", {}).get("id") not in self._allowed:
+            return
+        from .mentions import accepts_message
+        if not accepts_message(self.cfg, msg):
             return
         chat_id = (msg.get("chat") or {}).get("id")
         if chat_id is None:
