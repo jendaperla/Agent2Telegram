@@ -40,6 +40,7 @@ import re
 _UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 from .config import Config, _state_dir
 from .durable import DurableInbox, DurableOutbox
+from .notices import busy_text, restart_notice
 from .session import SessionError, TmuxSession
 from .telegram import TelegramClient, TelegramError, is_network_error, split_message
 
@@ -822,6 +823,8 @@ class AttachBridge:
             if self._sent_keys:
                 self._resume_position()
         self._cleanup_orphan_status()       # remove a bubble orphaned by a prior crash/restart
+        if self.cfg.restart_notice and self._session._pane_ok()[0]:
+            restart_notice(self, self._owner_chat)
         # Typing runs in its own thread so a flood-control sleep in the send path never starves it.
         threading.Thread(target=self._outbound_loop, daemon=True).start()
         threading.Thread(target=self._typing_loop, daemon=True).start()
@@ -1559,10 +1562,8 @@ class AttachBridge:
     def _maybe_ack_queued(self, upd: dict) -> None:
         """Acknowledge a message that arrived while work was already in progress.
 
-        The notice text is ENGLISH even when the conversation is in another language: the bridge
-        itself writes this, not the agent, and the bridge is a tool for anyone (it gets installed
-        for other people). The agent's own replies of course follow the conversation's language —
-        this is the one place the tool itself speaks.
+        The bridge writes this operational notice in cfg.language, independently of STT
+        and of the model's own responses. The default preserves existing English behavior.
         """
         if not self._turn_active.is_set():
             log.debug("ACK not sent: no turn in progress")
@@ -1586,8 +1587,7 @@ class AttachBridge:
             return
         self._last_queue_ack = ted
         try:
-            self.tg.send_message(chat_id, "⚡ Got your message. I'll get to it as soon as "
-                                          "I finish what I'm on.")
+            self.tg.send_message(chat_id, busy_text(self.cfg))
             # Must log: without a record you can't tell after an incident whether the ACK went
             # out. It was once impossible to decide whether the feature even worked.
             log.info("receipt ACK sent (another turn is running)")

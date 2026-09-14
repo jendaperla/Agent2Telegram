@@ -65,6 +65,9 @@ class Config:
     progress_marker: str = "[tg]"       # lines starting with this are sent live (interim)
     bot_username: str = ""              # the bot's @username (non-secret; for t.me/ deep links)
     require_mention: bool = False        # groups: only @bot mentions / replies to this bot
+    language: str = "en"                # operational notices: en | cs (independent of STT)
+    restart_notice: bool = False         # one startup notice, persisted 30-second cooldown
+    restart_notice_text: str = ""        # optional short literal text, no formatting placeholders
     # Directories the agent may send files FROM (see `file_marker`). Deliberately narrow:
     # the path comes from the agent's own reply text, so a wide allowlist would turn a
     # prompt-injection into file exfiltration. Empty list = the default outbox only.
@@ -92,6 +95,13 @@ class Config:
     def validate(self) -> None:
         if not isinstance(self.require_mention, bool):
             raise ConfigError("'require_mention' must be a boolean.")
+        if type(self.restart_notice) is not bool:
+            raise ConfigError("'restart_notice' must be a boolean.")
+        if self.language not in ('en', 'cs'):
+            raise ConfigError("'language' must be 'en' or 'cs'.")
+        if (not isinstance(self.restart_notice_text, str) or len(self.restart_notice_text) > 200
+                or any(ord(c) < 32 for c in self.restart_notice_text)):
+            raise ConfigError("'restart_notice_text' must be a single line of at most 200 characters.")
         if not self.agent or not isinstance(self.agent, str):
             raise ConfigError("Missing 'agent' (choose: claude-code, codex, generic).")
         if not self.token or _TOKEN_HINT not in self.token:
