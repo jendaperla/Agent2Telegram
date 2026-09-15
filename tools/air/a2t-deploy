@@ -8,7 +8,7 @@ SRC="$HOME/.agent2telegram-src"
 
 case "$USER" in
   llm-brain) UNITS=(agent2telegram.service) ;;
-  agents)    UNITS=(a2t-grain-mesh-sync.service a2t-kindle-notion-sync.service) ;;
+  agents)    UNITS=(a2t-grain-mesh-sync.service a2t-kindle-notion-sync.service a2t-inari.service) ;;
   *) echo "a2t-deploy: neznamy uzivatel '$USER' — nevim, ktere unity restartovat" >&2; exit 2 ;;
 esac
 
