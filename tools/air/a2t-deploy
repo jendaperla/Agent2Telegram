@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# a2t-deploy — nasazeni Agent2Telegram z forku jednim prikazem.
+# fetch -> main na origin/main (jen fast-forward) -> restart botu -> overeni, ze bridge nabehl.
+# Kanarek se dela rukou: nejdriv agents (levny pad), za den llm-brain (drahy pad).
+set -euo pipefail
+
+SRC="$HOME/.agent2telegram-src"
+
+case "$USER" in
+  llm-brain) UNITS=(agent2telegram.service) ;;
+  agents)    UNITS=(a2t-grain-mesh-sync.service a2t-kindle-notion-sync.service) ;;
+  *) echo "a2t-deploy: neznamy uzivatel '$USER' — nevim, ktere unity restartovat" >&2; exit 2 ;;
+esac
+
+cd "$SRC"
+git fetch -q origin
+OLD="$(git rev-parse HEAD)"
+NEW="$(git rev-parse origin/main)"
+
+if [ "$OLD" = "$NEW" ] && [ "${1:-}" != "--force" ]; then
+  echo "Uz nasazeno: $(git log --oneline -1). Restart vynutis pres --force."
+  exit 0
+fi
+
+git checkout -q main
+# ff-only schvalne: kdyz fork prepsal historii, je to duvod se podivat, ne tise resetovat
+git merge --ff-only origin/main
+echo "Kod: $OLD -> $(git rev-parse HEAD)"
+
+# Skripty pro Air ziji v repu (tools/air/), ne jen v ~/.local/bin — jinak se pri obnove
+# Airu ztrati (15. 9. 2026: a2t-watch.sh existoval jedine tady). Sam sebe nahrazuje pres mv:
+# bezici bash drzi stary inode, takze prepis za behu nic nerozbije.
+install_tool() {
+  local name="$1" src="$SRC/tools/air/$1" dst="$HOME/.local/bin/$1"
+  [ -f "$src" ] || { echo "CHYBA: $src v repu neni" >&2; return 1; }
+  if [ -f "$dst" ] && cmp -s "$src" "$dst"; then return 0; fi
+  install -m 755 "$src" "$dst.tmp" && mv -f "$dst.tmp" "$dst"
+  echo "Skript: $name aktualizovan"
+}
+install_tool a2t-deploy
+[ "$USER" = agents ] && install_tool a2t-watch.sh
+
+SINCE="$(date '+%Y-%m-%d %H:%M:%S')"
+for u in "${UNITS[@]}"; do
+  systemctl --user restart "$u"
+done
+
+# Overeni ucinku, ne odeslani: bridge musi zalogovat "Attach bridge live".
+sleep 8
+FAIL=0
+for u in "${UNITS[@]}"; do
+  if ! systemctl --user is-active --quiet "$u"; then
+    echo "CHYBA: $u nebezi" >&2; FAIL=1; continue
+  fi
+  if journalctl --user -u "$u" --since "$SINCE" --no-pager 2>/dev/null | grep -q "Attach bridge live"; then
+    echo "OK: $u nabehl (Attach bridge live)"
+  else
+    echo "CHYBA: $u bezi, ale 'Attach bridge live' se do $(( 8 ))s neobjevil — zkontroluj: journalctl --user -u $u -n 30" >&2
+    FAIL=1
+  fi
+done
+exit "$FAIL"
