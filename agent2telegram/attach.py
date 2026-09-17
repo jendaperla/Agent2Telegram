@@ -669,6 +669,16 @@ class AttachBridge:
                 cur = line_end
         self._tpos = pos
         self._turn_tpos = pos
+        if not self._turn_active.is_set():
+            # Adopted outside a bridge turn = a turn somebody else started (terminal, a
+            # launcher's tmux send-keys). Its origin is decided by ITS prompt, which sits
+            # before the cursor and is never read — so the flag must not be inherited from
+            # the previous transcript. On 2026-09-17 four launcher runs of Inari leaked their
+            # whole narration to Telegram under a flag a chat had left True hours earlier; a
+            # fifth run stayed quiet only because the adoption raced the prompt by <1 s.
+            # A Telegram-originated turn never comes through here: its prompt carries the
+            # origin prefix, the hook pins the file and _drain_pin classifies it.
+            self._turn_from_tg = False
 
     @staticmethod
     def _record_epoch(raw: bytes) -> float | None:

@@ -214,7 +214,7 @@ class TurnStartOffsetSurvivesANewTranscript(unittest.TestCase):
             b = _bridge(d)
             b._turn_tpos = 12_345
             b.cfg.transcript_path = "auto"
-            b._last_resolve = 0.0
+            b._last_resolve = -1e9   # ne 0.0: monotonic() na Macu bývá < 3 s a throttle přepnutí spolkne
             novy = Path(d) / "novy.jsonl"
             novy.write_text(_assistant("t1", "x") + "\n", "utf-8")
             b._resolve_transcript = lambda: novy

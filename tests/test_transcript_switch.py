@@ -31,7 +31,9 @@ def _codex_bridge(tmpdir):
     b._turn_active = threading.Event()
     b._turn_from_tg = True
     b._sent_keys = set()
-    b._last_resolve = 0.0
+    # -1e9, not 0.0: time.monotonic() can be below 3 s on macOS, and then
+    # _maybe_reresolve's 3 s throttle swallows the very switch under test.
+    b._last_resolve = -1e9
     b._tpos = 0
     b._turn_tpos = 0
     # fork-only: pin transcriptu od UserPromptSubmit hooku (viz tests/test_pin.py). Upstreamovy
@@ -79,6 +81,34 @@ class SwitchingTranscript(unittest.TestCase):
             self._switch_to(b, p)
             self.assertEqual(b._tpos, p.stat().st_size)
             self.assertEqual(b._turn_tpos, p.stat().st_size)
+
+    def test_adopting_outside_a_turn_forgets_the_previous_turns_telegram_origin(self):
+        """2026-09-17: a launcher's prompt (no origin prefix) started a fresh transcript; the
+        bridge adopted it by mtime with the cursor at the end, never read that prompt, and kept
+        ``_turn_from_tg=True`` from the owner's last chat — every text of the run went out.
+        Mutation: drop the reset in ``_seek_to_turn`` → this fails."""
+        with tempfile.TemporaryDirectory() as d:
+            b = _codex_bridge(d)
+            b._turn_from_tg = True                      # left over from a Telegram chat
+            p = Path(d) / "rollout-launcher.jsonl"
+            now = time.time()
+            p.write_text(_user("Zacina cyklus. work-order.json je pripraveny", now - 1) + "\n", "utf-8")
+            self._switch_to(b, p)
+            self.assertEqual(b._tpos, p.stat().st_size)
+            self.assertFalse(b._turn_from_tg)
+
+    def test_adopting_inside_a_bridge_turn_keeps_the_telegram_origin(self):
+        """The reset is for adoptions the bridge did not cause. Mid-turn (the session's own new
+        rollout, see the test below) the turn IS the bridge's and must stay Telegram-owned."""
+        with tempfile.TemporaryDirectory() as d:
+            b = _codex_bridge(d)
+            b._turn_from_tg = True
+            b._turn_active.set()
+            b._turn_started_wall = time.time() - 5
+            p = Path(d) / "rollout-own.jsonl"
+            p.write_text(_user("[TG] hi", time.time() - 3) + "\n", "utf-8")
+            self._switch_to(b, p)
+            self.assertTrue(b._turn_from_tg)
 
     def test_mid_turn_only_records_stamped_after_the_turn_began_are_read(self):
         """The replayed history (old timestamps) is skipped; the live prompt and its answer are not.
