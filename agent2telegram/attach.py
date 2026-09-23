@@ -33,6 +33,7 @@ from pathlib import Path
 from . import adapters
 from . import prompt_hook
 from . import readers
+from .background import SubagentWatcher, _epoch as _record_wall_time
 from . import tts
 from .compat import AlreadyRunning, single_instance_lock
 import re
@@ -103,6 +104,12 @@ TASK_NOTIFICATION_PREFIX = "<task-notification>"
 # (especially after a reset/reconnect), so give the final assistant text a short chance to land.
 BACKSTOP_RETRY_ATTEMPTS = 5
 BACKSTOP_RETRY_DELAY = 0.35
+
+#: Background progress (opt-in, Claude Code): how often the sub-agent watcher polls, and how old a
+#: transcript record may be to still count as live work. Records older than this — or written
+#: before the bridge started — are history being replayed, never shown as a status bubble.
+BACKGROUND_TICK = 2.0
+BACKGROUND_LIVE_WINDOW = 120.0
 
 #: Codex only: hold the first scraped tool bubble until the turn's intro text has been forwarded
 #: (agents usually say what they'll do, THEN call the tool). The scraper is live but the Codex
@@ -271,6 +278,14 @@ class AttachBridge:
     #: lookup cache (monotonic time, pid) — see _pin_agent_restarted.
     _pin_agent: int | None = None
     _agent_pid_cache: tuple[float, int | None] | None = None
+    # Background progress state. Class-level defaults so objects built without __init__
+    # (focused tests) behave as "feature off, nothing shown".
+    _bg_status = False          # the status bubble belongs to a turn NOT started from Telegram
+    _bg_status_last = 0.0       # monotonic ts of that turn's last tool call
+    _bg_arm = None              # (transcript, size at start/switch): only records after it are live
+    _rec_live = False           # the transcript record being handled is live background work
+    _bg_watcher = None          # SubagentWatcher (sub-agent progress message)
+    _bg_state_path = None
     #: Durable outbox with per-part confirmation. Off by default for objects built without
     #: __init__ (focused tests), which have no queue path to write to.
     _use_durable_outbox = True
@@ -355,6 +370,8 @@ class AttachBridge:
         # Persist the bubble's message_id so a restart/crash mid-turn can delete the orphan it
         # would otherwise leave behind in the chat.
         self._status_path = (self._signal.parent / "status_bubble") if self._signal else None
+        # Same for the background progress message (per bridge, like the heartbeat).
+        self._bg_state_path = (self._signal.parent / f"background_progress_{_slug}") if self._signal else None
         self._seen_tools: set = set()
         self._tui_seen: set = set()          # Codex TUI scrape: tool lines already shown this turn
         self._turn_text_sent = False         # has any text been forwarded this turn (bubble gate)
@@ -705,6 +722,7 @@ class AttachBridge:
         log.info("transcript → %s", newest.name)
         self._transcript = newest
         self._seek_to_turn()
+        self._arm_background()
 
     def _seek_to_turn(self) -> None:
         """Position the cursor in a freshly adopted transcript so that only the CURRENT turn is
@@ -822,7 +840,9 @@ class AttachBridge:
             self._tpos = self._transcript.stat().st_size
             if self._sent_keys:
                 self._resume_position()
+        self._arm_background()              # everything already in the transcript is history
         self._cleanup_orphan_status()       # remove a bubble orphaned by a prior crash/restart
+        self._start_background()
         if self.cfg.restart_notice and self._session._pane_ok()[0]:
             restart_notice(self, self._owner_chat)
         # Typing runs in its own thread so a flood-control sleep in the send path never starves it.
@@ -2122,6 +2142,7 @@ class AttachBridge:
                     log.warning("konec turnu podle ticha (%.0f s bez aktivity), hook se neozval",
                                 self._idle_limit())
                     self._end_turn()
+                self._expire_background_status()
                 # Live retry: messages that failed to deliver are retried while running too.
                 # Replay only at startup meant, for a long-running service, waiting forever.
                 if time.monotonic() - getattr(self, "_last_inbound_retry", 0.0) > INBOUND_RETRY_INTERVAL:
@@ -2148,18 +2169,86 @@ class AttachBridge:
         except OSError:
             pass
 
+    # ---- background progress (opt-in, Claude Code) ------------------------------------
+    def _background_enabled(self) -> bool:
+        cfg = getattr(self, "cfg", None)
+        return (getattr(cfg, "background_progress", False) is True
+                and getattr(cfg, "agent", "") == "claude-code")
+
+    def _arm_background(self) -> None:
+        """Remember where the transcript ends NOW. Records up to here are history (a startup
+        rewind or a freshly adopted transcript replays them) and never produce a bubble."""
+        t = getattr(self, "_transcript", None)
+        try:
+            size = t.stat().st_size if t is not None else 0
+        except OSError:
+            size = 0
+        self._bg_arm = (t, size)
+
+    def _record_is_live(self, offset: int, rec: dict) -> bool:
+        """Is this record live work worth a background bubble? Appended after the bridge armed
+        (not a replay) AND stamped recently (not an old record in a re-read file)."""
+        if not self._background_enabled() or self._bg_arm is None:
+            return False
+        path, size = self._bg_arm
+        if path != getattr(self, "_transcript", None) or offset < size:
+            return False
+        ts = _record_wall_time(rec)
+        return ts is not None and abs(time.time() - ts) <= BACKGROUND_LIVE_WINDOW
+
+    def _expire_background_status(self) -> None:
+        """Safety net for a background bubble whose turn end was never signalled."""
+        if not self._bg_status or self._turn_active.is_set():
+            return
+        limit = float(getattr(self.cfg, "background_stale_after", 300.0) or 300.0)
+        if time.monotonic() - self._bg_status_last > limit:
+            log.info("background status bubble silent for %.0f s → removed", limit)
+            self._status_clear()
+
+    def _start_background(self) -> None:
+        """Remove an orphaned sub-agent progress message and, if enabled, start the watcher."""
+        watcher = SubagentWatcher(
+            self.tg, self._owner_chat,
+            transcript=lambda: self._transcript,
+            state_path=self._bg_state_path,
+            language=getattr(self.cfg, "language", "en"),
+            edit_interval=getattr(self.cfg, "background_edit_interval", 10.0),
+            stale_after=getattr(self.cfg, "background_stale_after", 300.0))
+        watcher.cleanup_orphan()             # even when disabled: a leftover from an earlier run
+        if not self._background_enabled():
+            return
+        self._bg_watcher = watcher
+        threading.Thread(target=self._background_loop, daemon=True).start()
+        log.info("background progress on (sub-agents + non-Telegram turns)")
+
+    def _background_loop(self) -> None:
+        """Own thread: a flood-control wait on an edit must never stall reply forwarding."""
+        while not self._stop.is_set():
+            try:
+                self._bg_watcher.tick()
+            except Exception as e:
+                log.error("background progress error: %s", e)
+            self._stop.wait(BACKGROUND_TICK)
+
     # ---- live tool-call status bubble (shown during the turn, deleted at the end) ------
-    def _status_push(self, line: str) -> None:
+    def _status_push(self, line: str, *, background: bool = False) -> None:
         # Single line, emoji at the start, rendered in italics. One bubble is edited in place
         # across a run of consecutive tool calls; it's deleted when the next progress message
         # arrives (then re-created below it) and at turn end — so it always trails at the bottom.
+        if background:
+            # A turn not started from Telegram (background-task notification, terminal). Only
+            # live records get here (see _record_is_live), and such a bubble has two ways out:
+            # the Stop-hook turn end, or _expire_background_status after a silence.
+            self._bg_status = True
+            self._bg_status_last = time.monotonic()
         if self._owner_chat is None or not line or line == self._status["shown"]:
             return
         # No live turn → no bubble. The bubble is technical progress and is deleted at turn end;
         # one created outside a turn has nothing to delete it and hangs in the chat until the NEXT
         # turn happens to finish. Seen in practice: "Editing MEMORY.md" stuck for eight
         # minutes after a bridge restart drained the transcript with no turn running (2026-08-02).
-        if not self._turn_active.is_set():
+        # The background path is the one exception, and it is guarded against exactly that replay.
+        if not self._turn_active.is_set() and not background:
             return
         body = f"<i>{html.escape(line)}</i>"
         if self._status["mid"] is None:
@@ -2180,6 +2269,7 @@ class AttachBridge:
                 log.warning("status bubble cleanup failed: %s", e)
         self._status = {"mid": None, "shown": ""}
         self._seen_tools.clear()
+        self._bg_status = False
         self._persist_status(None)
 
     def _persist_status(self, mid: int | None) -> None:
@@ -2232,17 +2322,24 @@ class AttachBridge:
         nl = chunk.rfind(b"\n")
         if nl == -1:
             return
+        off = self._tpos
         self._tpos += nl + 1
-        for raw in chunk[:nl].split(b"\n"):
-            line = raw.decode("utf-8", "ignore").strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            for ev in self._reader.parse(rec):
-                self._handle_event(ev)
+        try:
+            for raw in chunk[:nl].split(b"\n"):
+                rec_off = off
+                off += len(raw) + 1
+                line = raw.decode("utf-8", "ignore").strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                self._rec_live = self._record_is_live(rec_off, rec)
+                for ev in self._reader.parse(rec):
+                    self._handle_event(ev)
+        finally:
+            self._rec_live = False
         # Any new transcript content during a Telegram turn = the agent is still working; refresh
         # activity so the idle fallback doesn't fire prematurely.
         if self._turn_from_tg:
@@ -2468,6 +2565,12 @@ class AttachBridge:
         if ev.kind in ("text", "tool") and ev.stop_reason:
             self._last_stop_reason = ev.stop_reason
         if self._owner_chat is None:
+            return
+        if ev.kind == "tool" and not self._turn_from_tg and self._rec_live:
+            # Live tool call of a turn NOT started from Telegram (opt-in background progress).
+            if ev.key and ev.key not in self._seen_tools:
+                self._seen_tools.add(ev.key)
+                self._status_push(ev.text, background=True)
             return
         if not self._turn_from_tg:
             # A text that carries the routing marker is addressed to Telegram no matter what the

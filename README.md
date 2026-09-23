@@ -249,6 +249,16 @@ The default is off. A host-state marker enforces a 30-second cooldown across pro
 including failed/uncertain sends. The notice is not retried in a background loop; an uncertain
 Telegram acknowledgement can mean no visible notice. Keep a distinct state directory for each bot.
 
+Background progress (attach mode, Claude Code): `"background_progress": true` shows work that
+runs outside a Telegram turn. Running sub-agents (Claude Code writes them to
+`<session>/subagents/`) get ONE message, edited in place with each sub-agent's description,
+elapsed time and latest tool call, and deleted when they finish or go silent. Turns not started
+from Telegram (e.g. a background-task notification) get the usual one-line tool status bubble,
+deleted at that turn's end. Only one short line per step is sent, never tool output, and nothing
+is shown for history replayed at startup. `"background_edit_interval"` (seconds, default 10)
+throttles edits; `"background_stale_after"` (default 300) drops progress that went silent. The
+labels follow `"language"`. The default is off.
+
 ---
 
 ## Run it forever (boot + auto‑restart)

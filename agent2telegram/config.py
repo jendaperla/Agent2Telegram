@@ -73,6 +73,12 @@ class Config:
     # prompt-injection into file exfiltration. Empty list = the default outbox only.
     outbox_dirs: list[str] = field(default_factory=list)
     file_marker: str = "[tg-file]"       # lines like `[tg-file] /path/clip.mp4` upload that file
+    # Attach mode, Claude Code: show work that runs outside a Telegram turn — running sub-agents
+    # (one message edited in place) and tool calls of turns not started from Telegram (e.g. a
+    # background-task notification). Off by default: it adds messages to the owner's chat.
+    background_progress: bool = False
+    background_edit_interval: float = 10.0   # min seconds between edits of the progress message
+    background_stale_after: float = 300.0    # silent this long → progress is dropped/deleted
 
     def path_outbox(self) -> Path:
         """Default place to put files meant for Telegram."""
@@ -97,6 +103,12 @@ class Config:
             raise ConfigError("'require_mention' must be a boolean.")
         if type(self.restart_notice) is not bool:
             raise ConfigError("'restart_notice' must be a boolean.")
+        if type(self.background_progress) is not bool:
+            raise ConfigError("'background_progress' must be a boolean.")
+        for name in ("background_edit_interval", "background_stale_after"):
+            v = getattr(self, name)
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+                raise ConfigError(f"'{name}' must be a positive number.")
         if self.language not in ('en', 'cs'):
             raise ConfigError("'language' must be 'en' or 'cs'.")
         if (not isinstance(self.restart_notice_text, str) or len(self.restart_notice_text) > 200
