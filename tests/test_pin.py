@@ -101,6 +101,8 @@ class _Env:
         b._hold_logged_seq = -1
         b._transcript = None
         b._tpos = 0
+        self.agent_pid = 100            # the agent process in the pane; tests "restart" it
+        b._agent_pid = lambda: self.agent_pid
         self.bridge = b
 
     def close(self):
@@ -255,6 +257,64 @@ class PinTests(unittest.TestCase):
         old = time.time() - 7200
         os.utime(self.b._pin_path, (old, old))
         self.assertFalse(self.b._drain_pin(), "a stale pin with no active turn must not latch")
+
+    def _chat_then_launcher_restart(self):
+        """A Telegram turn pins `old`, the turn ends, then a launcher restarts the agent into a
+        new session `fresh` with a prompt that carries no [TG] — the Inari cycle of 25. 9."""
+        old = self.env.transcript("old")
+        fresh = self.env.transcript("fresh")
+        _append(old, _rec_user("[TG] probehl cyklus?"))
+        self.env.turn_starts()
+        self.env.pin(old)
+        self.env.cycle()
+        self.assertEqual(self.b._transcript, old)
+        self.b._turn_active.clear()          # turn over; pin is still fresh (< 1 h)
+        time.sleep(0.01)
+        _append(fresh, _rec_user("Zacina cyklus. ..."))
+        return old, fresh
+
+    def test_pin_dropped_when_agent_restarts(self):
+        old, fresh = self._chat_then_launcher_restart()
+        self.env.agent_pid = 200
+        self.env.cycle()
+        self.assertIsNone(self.b._pinned)
+        self.assertEqual(self.b._transcript, fresh, "bridge must follow the new session")
+        _append(fresh, _rec_asst("[TG]\nDIGEST CYKLU", "d1"))
+        self.env.cycle()
+        self.assertIn("DIGEST CYKLU", " ".join(self.b.tg.sent))
+
+    def test_pin_kept_while_agent_unchanged(self):
+        """Same process, fresh pin: a newer sibling log (background agent) must not win."""
+        old, fresh = self._chat_then_launcher_restart()
+        self.env.cycle()
+        self.assertEqual(self.b._pinned, old)
+        self.assertEqual(self.b._transcript, old)
+
+    def test_unknown_agent_pid_is_not_a_restart(self):
+        old, fresh = self._chat_then_launcher_restart()
+        self.env.agent_pid = None
+        self.env.cycle()
+        self.assertEqual(self.b._transcript, old)
+
+    def test_next_pin_after_drop_is_accepted(self):
+        old, fresh = self._chat_then_launcher_restart()
+        self.env.agent_pid = 200
+        self.env.cycle()
+        self.env.turn_starts()
+        time.sleep(0.01)
+        _append(fresh, _rec_user("[TG] dalsi otazka"))
+        self.env.pin(fresh)
+        self.env.cycle()
+        self.assertEqual(self.b._pinned, fresh)
+        self.assertEqual(self.b._pin_agent, 200)
+
+    def test_missing_pin_file_yields_to_heuristic(self):
+        """The launcher-side stopgap: deleting the pin file hands the choice back to the
+        newest-transcript heuristic even while the in-memory pin is fresh."""
+        old, fresh = self._chat_then_launcher_restart()
+        self.b._pin_path.unlink()
+        self.env.cycle()
+        self.assertEqual(self.b._transcript, fresh)
 
     def test_subagent_transcripts_excluded_from_heuristic(self):
         sub = self.env.proj / "some-session" / "subagents"

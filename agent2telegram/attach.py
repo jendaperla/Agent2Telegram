@@ -252,6 +252,10 @@ class AttachBridge:
     _turn_seq = 0
     _pin_accepted_seq = -1
     _hold_logged_seq = -1
+    #: PID of the agent process when the current pin was accepted, and the throttled
+    #: lookup cache (monotonic time, pid) — see _pin_agent_restarted.
+    _pin_agent: int | None = None
+    _agent_pid_cache: tuple[float, int | None] | None = None
     #: Durable outbox with per-part confirmation. Off by default for objects built without
     #: __init__ (focused tests), which have no queue path to write to.
     _use_durable_outbox = True
@@ -583,6 +587,7 @@ class AttachBridge:
                 else:
                     self._pin_accepted_seq = self._turn_seq
                     self._pinned = target
+                    self._pin_agent = self._agent_pid()
                     if target != self._transcript:
                         log.info("transcript → %s (pinned)", target.name)
                         self._transcript = target
@@ -597,7 +602,56 @@ class AttachBridge:
         # Trust the pin while a turn runs, or while it is reasonably fresh.
         if self._pinned is None:
             return False
+        # ...but never across an agent restart. Only [TG] prompts pin, so a session started by
+        # a launcher (cron cycle, watchdog) never moves the pin, and for up to an hour the bridge
+        # kept tailing the dead session's transcript — the new session's report was never
+        # forwarded (Inari, 25. 9. 2026: cycles 13:45 and 15:15). A new process cannot be
+        # writing the pinned file, so the pin is dropped and the heuristic picks the new log.
+        if self._pin_agent_restarted():
+            log.info("pin dropped (agent process restarted): %s", self._pinned.name)
+            self._pinned = None
+            return False
         return self._turn_active.is_set() or (time.time() - self._pin_stamp) < 3600.0
+
+    def _pin_agent_restarted(self) -> bool:
+        """True when the agent process in the pane is no longer the one that was running when
+        the current pin was accepted. Unknown PIDs never count as a restart."""
+        now = self._agent_pid()
+        if now is None:
+            return False
+        if self._pin_agent is None:           # pin accepted while the lookup failed → adopt
+            self._pin_agent = now
+            return False
+        return now != self._pin_agent
+
+    def _agent_pid(self) -> int | None:
+        """PID of the agent in the driven tmux pane: the pane shell's child (tmux → bash →
+        claude), or the pane process itself when the agent is the pane's root command. None
+        when tmux or ps can't tell. Throttled to one lookup per 3 s — _drain_pin runs on every
+        outbound poll."""
+        now = time.monotonic()
+        cache = self._agent_pid_cache
+        if cache is not None and now - cache[0] < 3.0:
+            return cache[1]
+        pid = None
+        try:
+            out = subprocess.run(
+                ["tmux", "list-panes", "-t", self.cfg.tmux_session, "-F", "#{pane_pid}"],
+                capture_output=True, text=True, timeout=5)
+            panes = [int(x) for x in out.stdout.split() if x.isdigit()]
+            if panes:
+                ps = subprocess.run(["ps", "-axo", "pid=,ppid="],
+                                    capture_output=True, text=True, timeout=5)
+                kids = []
+                for ln in ps.stdout.splitlines():
+                    parts = ln.split()
+                    if len(parts) == 2 and parts[0].isdigit() and parts[1] == str(panes[0]):
+                        kids.append(int(parts[0]))
+                pid = min(kids) if kids else panes[0]
+        except (subprocess.SubprocessError, OSError, ValueError):
+            pid = None
+        self._agent_pid_cache = (now, pid)
+        return pid
 
     def _maybe_reresolve(self) -> None:
         """Keep the tailed transcript pointed at the log our tmux session is really writing.
