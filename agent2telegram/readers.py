@@ -28,6 +28,7 @@ from collections import deque
 import os
 import urllib.parse
 from dataclasses import dataclass
+from .redaction import redact
 
 
 @dataclass
@@ -40,7 +41,7 @@ class Ev:
 
 
 def _short(s: str, n: int = 58) -> str:
-    s = " ".join(str(s).split()).replace("**", "").replace("`", "")
+    s = " ".join(redact(s).split()).replace("**", "").replace("`", "")
     return s if len(s) <= n else s[:n - 1] + "…"
 
 
@@ -62,7 +63,7 @@ def _claude_tool_summary(name: str, inp: dict) -> str:
         return "🔎 Searching " + _short(inp.get("pattern", ""))
     if name == "WebFetch":
         try:
-            host = urllib.parse.urlparse(inp.get("url", "")).netloc or inp.get("url", "")
+            host = urllib.parse.urlparse(inp.get("url", "")).hostname or inp.get("url", "")
         except Exception:
             host = inp.get("url", "")
         return "🌐 Web " + _short(host)
