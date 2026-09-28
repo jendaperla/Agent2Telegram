@@ -12,6 +12,7 @@ def samples():
     yield "X=" + SECRET + " command"
     yield "Authorization: Bearer " + SECRET
     yield "https://user:" + SECRET + "@example.org/?token=" + SECRET
+    yield "https://api.example.org/bot123456789:" + SECRET + "/getMe"
 
 def test_redaction_before_truncation_and_all_summary_inputs(tmp_path):
     for sample in samples():

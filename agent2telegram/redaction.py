@@ -11,7 +11,7 @@ PAIR = re.compile(r'''(?i)(["']?\b''' + KEY + r'''["']?\s*[:=]\s*)''' + VALUE)
 ARG = re.compile(r"(?i)(--?" + KEY + r"\s+)" + VALUE)
 ENV = re.compile(r"(?<![\w-])([A-Z_][A-Z0-9_]*\s*=\s*)" + VALUE)
 AUTH = re.compile(r"(?i)\b(?:Bearer|Basic)\s+[A-Za-z0-9+/_.=:%-]+")
-TOKENS = re.compile(r"\b(?:\d{6,16}:[A-Za-z0-9_-]{20,}|(?:sk-ant-|sk-proj-|sk_|ghp_|github_pat_|xox[bp]-|AIza|AKIA)[A-Za-z0-9_-]{6,})")
+TOKENS = re.compile(r"(?:\d{6,16}:[A-Za-z0-9_-]{20,}|\b(?:sk-ant-|sk-proj-|sk_|ghp_|github_pat_|xox[bp]-|AIza|AKIA)[A-Za-z0-9_-]{6,})")
 URL = re.compile(r"""https?://[^\s<>"']+""", re.I)
 
 def sensitive(key):
