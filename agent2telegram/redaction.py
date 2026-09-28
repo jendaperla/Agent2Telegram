@@ -28,6 +28,10 @@ def _url(match):
         return MASK
 
 def _text(text):
+    # Shell/JSON escaping can hide delimiters from a text regex. Diagnostic
+    # output may be suppressed entirely; never partially expose such a value.
+    if '\\' in text and re.search(KEY, text, re.I):
+        return MASK
     text=URL.sub(_url,text)
     text=AUTH.sub(MASK,text)
     for pattern in (PAIR,ARG,ENV):
