@@ -6,16 +6,24 @@ from urllib.parse import urlsplit, urlunsplit
 MASK = "[REDACTED]"
 KEY = r"(?:[\w-]*(?:api[_-]?key|token|password|passwd|secret|authorization|credential|private[_-]?key)|pass|heslo)"
 QUOTED = r'''"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*' '''
-VALUE = "(?:" + QUOTED.strip() + r"|[^\s,;}\]&]+)"
-PAIR = re.compile(r'''(?i)(["']?\b''' + KEY + r'''["']?\s*[:=]\s*)''' + VALUE)
+# Consume an existing marker whole: later passes must not leave its closing ].
+VALUE = "(?:" + QUOTED.strip() + "|(?:" + re.escape(MASK) + r"|[^\s,;}\]&])+)"
+PAIR = re.compile(r'''(?i)(["']?\b''' + KEY + r'''["']?[ \t]*[:=][ \t]*)''' + VALUE)
 ARG = re.compile(r"(?i)(--?" + KEY + r"\s+)" + VALUE)
-ENV = re.compile(r"(?<![\w-])([A-Z_][A-Z0-9_]*\s*=\s*)" + VALUE)
+ENV = re.compile(r"(?<![\w-])(([A-Z_][A-Z0-9_]*)[ \t]*=[ \t]*)(" + VALUE + ")")
+ENV_SECRET_KEY = re.compile(r"(?:^|_)(?:key|token|secret|password|passwd|pass|auth(?:orization)?|credentials?|heslo)(?:_|$)", re.I)
 AUTH = re.compile(r"(?i)\b(?:Bearer|Basic)\s+[A-Za-z0-9+/_.=:%-]+")
 TOKENS = re.compile(r"(?:\d{6,16}:[A-Za-z0-9_-]{20,}|\b(?:sk-ant-|sk-proj-|sk_|ghp_|github_pat_|xox[bp]-|AIza|AKIA)[A-Za-z0-9_-]{6,})")
 URL = re.compile(r"""https?://[^\s<>"']+""", re.I)
 
 def sensitive(key):
     return bool(re.fullmatch(KEY, str(key), re.I))
+
+def _env(match):
+    key, value = match.group(2), match.group(3)
+    if sensitive(key) or ENV_SECRET_KEY.search(key) or TOKENS.search(value):
+        return match.group(1) + MASK
+    return match.group()
 
 def _url(match):
     try:
@@ -34,8 +42,9 @@ def _text(text):
         return MASK
     text=URL.sub(_url,text)
     text=AUTH.sub(MASK,text)
-    for pattern in (PAIR,ARG,ENV):
+    for pattern in (PAIR,ARG):
         text=pattern.sub(lambda m:m.group(1)+MASK,text)
+    text=ENV.sub(_env,text)
     return TOKENS.sub(MASK,text)
 
 def _tree(value):

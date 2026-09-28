@@ -1,15 +1,46 @@
 import json
 from pathlib import Path
+import pytest
 from agent2telegram import readers
 from agent2telegram.background import SubagentWatcher, _Agent
+from agent2telegram.redaction import redact
 
 SECRET = "SyntheticCredentialNeverPublish123456789"
+
+def test_env_keeps_port_and_mode():
+    text="PORT=8080\nTELEGRAM_BOT_TOKEN=123456789:"+SECRET+"\nMODE=prod"
+    assert redact(text)=="PORT=8080\nTELEGRAM_BOT_TOKEN=[REDACTED]\nMODE=prod"
+
+def test_env_replacement_has_no_extra_bracket():
+    assert redact("TELEGRAM_BOT_TOKEN="+SECRET)=="TELEGRAM_BOT_TOKEN=[REDACTED]"
+
+def test_empty_secret_does_not_consume_next_line():
+    text="TOKEN=\nMODE=prod\nPORT=8080"
+    assert redact(text)==text
+
+@pytest.mark.parametrize("text", ["TOKEN=synthetic-value", "TOKEN='synthetic value'", "TOKEN=[REDACTED]", "tool --token synthetic-value", "TOKEN=https://example.org/?token=synthetic-value"])
+def test_redaction_is_idempotent(text):
+    once=redact(text)
+    assert "[REDACTED]]" not in once
+    assert redact(once)==once
+
+@pytest.mark.parametrize("key", ["KEY","SERVICE_KEY","AUTH","AUTH_HEADER","TOKEN_FILE","PASSWORD","SECRET_ACCESS_KEY"])
+def test_env_secret_keys(key):
+    assert redact(key+"=synthetic-value")==key+"=[REDACTED]"
+
+def test_env_recognizes_token_value_under_neutral_key():
+    assert redact("X=sk-proj-"+SECRET)=="X=[REDACTED]"
+
+def test_safe_text_and_selective_json_unchanged():
+    text="PORT=8080\nMODE=prod\nMONKEY=capuchin\ngit status --short"
+    assert redact(text)==text
+    assert json.loads(redact(json.dumps({"PORT":8080,"MODE":"prod","token":SECRET})))=={"PORT":8080,"MODE":"prod","token":"[REDACTED]"}
 
 def samples():
     for key in ("api_key","apiKey","token","refresh_token","password","secret","authorization"):
         yield json.dumps({key: SECRET})
         yield "tool --" + key + " " + SECRET
-    yield "X=" + SECRET + " command"
+    yield "X=sk-proj-" + SECRET + " command"
     yield "Authorization: Bearer " + SECRET
     yield "https://user:" + SECRET + "@example.org/?token=" + SECRET
     yield "https://api.example.org/bot123456789:" + SECRET + "/getMe"
