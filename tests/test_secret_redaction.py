@@ -13,6 +13,8 @@ def samples():
     yield "Authorization: Bearer " + SECRET
     yield "https://user:" + SECRET + "@example.org/?token=" + SECRET
     yield "https://api.example.org/bot123456789:" + SECRET + "/getMe"
+    yield json.dumps(json.dumps({'api_key': SECRET}))
+    yield 'echo ' + json.dumps(json.dumps({'password': SECRET}))
 
 def test_redaction_before_truncation_and_all_summary_inputs(tmp_path):
     for sample in samples():
