@@ -52,6 +52,31 @@ class SynthesizeLongTests(unittest.TestCase):
             self.assertEqual(tts.synthesize_long("Krátká věta.", api_key="k", voice_id="v"), [b"mp3"])
         self.assertEqual(syn.call_count, 1)
 
+    def test_v3_speaks_a_normal_reply_in_one_request(self):
+        # v3 gives every request a different "take" (timbre/pace), so splitting a ~1 500-char
+        # reply into 350-char pieces sounded like alternating voices (2026-10-08).
+        text = "Tohle je běžná věta odpovědi. " * 50          # ~1 500 chars
+        with mock.patch.object(tts, "synthesize", return_value=b"mp3") as syn:
+            tts.synthesize_long(text, api_key="k", voice_id="v", model_id="eleven_v3")
+        self.assertEqual(syn.call_count, 1)
+
+    def test_v3_requests_carry_a_fixed_seed(self):
+        seen = []
+
+        class Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return b"mp3"
+
+        class Opener:
+            def open(self, req, timeout=None):
+                seen.append(__import__("json").loads(req.data)); return Resp()
+
+        for _ in range(2):
+            tts.synthesize("Ahoj.", api_key="k", voice_id="v", model_id="eleven_v3", opener=Opener())
+        self.assertEqual(seen[0].get("seed"), seen[1].get("seed"))
+        self.assertIsNotNone(seen[0].get("seed"))
+
     def test_nothing_to_speak(self):
         with self.assertRaises(tts.TTSError):
             tts.synthesize_long("", api_key="k", voice_id="v")

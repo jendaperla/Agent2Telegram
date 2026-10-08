@@ -88,8 +88,10 @@ def synthesize(text: str, *, api_key: str, voice_id: str, model_id: str = DEFAUL
     if not (text or "").strip():
         raise TTSError("nothing to speak")
     url = TTS_URL.format(voice_id=voice_id) + f"?output_format={output_format}"
-    body = json.dumps({"text": text, "model_id": model_id,
-                       "voice_settings": voice_settings_for(model_id)}).encode("utf-8")
+    payload = {"text": text, "model_id": model_id, "voice_settings": voice_settings_for(model_id)}
+    if _is_v3(model_id):
+        payload["seed"] = V3_SEED      # same seed → same "take" style across requests
+    body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url, data=body,
         headers={"xi-api-key": api_key, "Content-Type": "application/json",
@@ -126,6 +128,14 @@ def synthesize(text: str, *, api_key: str, voice_id: str, model_id: str = DEFAUL
 # alpha v3 model gets flaky, so a long text is spoken in sentence-sized pieces and the
 # caller glues the audio together. Splitting is by SENTENCE, never mid-word.
 LONG_CHUNK_CHARS = 350   # ~20 s of speech per request: measured flat (±1.5 dB) where 700 already sagged 4–7 dB
+# v3 gives every request a different take (timbre, pace), so short pieces sounded like alternating
+# voices (2026-10-08). Speak a normal reply in one request and keep a fixed seed between pieces.
+V3_CHUNK_CHARS = 2800
+V3_SEED = 424242
+
+
+def _is_v3(model_id: str) -> bool:
+    return str(model_id or "").startswith("eleven_v3")
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 
 
@@ -153,9 +163,11 @@ def split_for_tts(text: str, max_chars: int = LONG_CHUNK_CHARS) -> list[str]:
 
 
 def synthesize_long(text: str, *, api_key: str, voice_id: str, model_id: str = DEFAULT_MODEL_ID,
-                    max_chars: int = LONG_CHUNK_CHARS, **kwargs) -> list[bytes]:
+                    max_chars: int | None = None, **kwargs) -> list[bytes]:
     """Speak a long text as a list of mp3 segments (one per :func:`split_for_tts` piece), in
     order. The caller concatenates them (ffmpeg). Raises :class:`TTSError` like :func:`synthesize`."""
+    if max_chars is None:
+        max_chars = V3_CHUNK_CHARS if _is_v3(model_id) else LONG_CHUNK_CHARS
     pieces = split_for_tts(text, max_chars=max_chars)
     if not pieces:
         raise TTSError("nothing to speak")
