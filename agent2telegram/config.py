@@ -50,6 +50,10 @@ class Config:
     # line comes from THIS config file (owner-writable, trusted); the Telegram user only
     # picks WHICH predefined command runs, never WHAT it is.
     shell_commands: dict[str, str] = field(default_factory=dict)
+    # Agent /commands shown in Telegram's "/" menu: {"name": "description"}. The bridge does
+    # NOT handle them — "/name args" is forwarded to the agent as plain text, the agent's own
+    # instructions say what it means. Only adds autocomplete; bridge commands keep priority.
+    agent_commands: dict[str, str] = field(default_factory=dict)
     # ---- persistent "attach" mode (drive an existing live agent session) ----
     mode: str = "oneshot"               # "oneshot" | "attach"
     tmux_session: str = ""              # name of the existing tmux session to drive
