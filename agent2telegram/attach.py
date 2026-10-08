@@ -128,6 +128,20 @@ BOT_COMMANDS = [
     {"command": "id", "description": "Show your Telegram id"},
 ]
 
+def menu_commands(cfg) -> list[dict]:
+    """Bridge commands + the agent's own `agent_commands` (forwarded to the agent as text).
+    Bridge names win on a clash; Telegram allows lowercase a-z, 0-9 and _ (1–32 chars)."""
+    out = list(BOT_COMMANDS)
+    taken = {c["command"] for c in out}
+    for name, desc in (getattr(cfg, "agent_commands", None) or {}).items():
+        name = str(name).lower().lstrip("/")
+        if name in taken or not re.fullmatch(r"[a-z0-9_]{1,32}", name):
+            continue
+        out.append({"command": name, "description": (str(desc) or name)[:256]})
+        taken.add(name)
+    return out
+
+
 #: Injected ahead of the user's message while voice mode is ON, so the AGENT writes a reply meant
 #: to be HEARD rather than read. This marker — not a regex — is the heart of voice mode: the model
 #: phrases speakable text (short, numbers as words, no paths) far better than any post-processing.
@@ -783,7 +797,7 @@ class AttachBridge:
         me = self.tg.get_me()
         log.info("Attach bridge live as @%s → tmux '%s', owner=%s",
                  me.get("username"), self.cfg.tmux_session, self._owner_chat)
-        self.tg.set_my_commands(BOT_COMMANDS)    # enable the "/" command menu in Telegram
+        self.tg.set_my_commands(menu_commands(self.cfg))   # enable the "/" command menu in Telegram
         if not self._session.alive:
             raise RuntimeError(f"tmux session '{self.cfg.tmux_session}' not found")
         # Backfill session_cwd for configs written before the field existed. The prompt hook
