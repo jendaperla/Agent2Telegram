@@ -58,6 +58,7 @@ class Config:
     reply_to_origin_chat: bool = False   # attach: answer in the chat the last authorized message came from
     group_only_user_ids: list[int] = field(default_factory=list)   # allowed users accepted ONLY in groups
     allowed_group_ids: list[int] = field(default_factory=list)     # if set, groups other than these are ignored
+    group_marker: str = ""              # reply starting with this goes to allowed_group_ids[0] (marker stripped)
     language: str = "en"                # operational notices: en | cs (independent of STT)
     restart_notice: bool = False         # one startup notice, persisted 30-second cooldown
     restart_notice_text: str = ""        # optional short literal text, no formatting placeholders

@@ -48,3 +48,21 @@ class ReplyToOriginTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GroupMarkerTests(unittest.TestCase):
+    def test_marker_routes_to_first_allowed_group_and_is_stripped(self):
+        cfg = Config(agent="claude-code", token="fixture:only", allowed_user_ids=[11],
+                     reply_to_origin_chat=True, allowed_group_ids=[-500], group_marker="[skupina]")
+        b = object.__new__(AttachBridge)
+        b.cfg, b._owner_chat = cfg, 11
+        self.assertEqual(b._route_group_marker("[skupina] Ahoj všem"), "Ahoj všem")
+        self.assertEqual(b._owner_chat, -500)
+
+    def test_no_marker_or_no_group_keeps_chat(self):
+        cfg = Config(agent="claude-code", token="fixture:only", allowed_user_ids=[11], group_marker="[skupina]")
+        b = object.__new__(AttachBridge)
+        b.cfg, b._owner_chat = cfg, 11
+        self.assertEqual(b._route_group_marker("[skupina] x"), "[skupina] x")
+        self.assertEqual(b._route_group_marker("Ahoj"), "Ahoj")
+        self.assertEqual(b._owner_chat, 11)

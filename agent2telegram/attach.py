@@ -879,7 +879,21 @@ class AttachBridge:
         if turn_text:
             self._turn_text_sent = True
 
+    def _route_group_marker(self, text: str) -> str:
+        """A reply that starts with `group_marker` is sent to the first allowed group (the marker
+        itself is stripped). Without a configured marker AND group this is a no-op."""
+        marker = getattr(self.cfg, "group_marker", "") or ""
+        groups = getattr(self.cfg, "allowed_group_ids", []) or []
+        if not marker or not groups or not text:
+            return text
+        stripped = text.lstrip()
+        if stripped.lower().startswith(marker.lower()):
+            self._owner_chat = groups[0]
+            return stripped[len(marker):].lstrip()
+        return text
+
     def _send_final(self, text: str, key: str | None = None, *, turn_text: bool = True) -> None:
+        text = self._route_group_marker(text)
         """Forward one reply RELIABLY. Marks the dedup ledger only AFTER a confirmed send; on any
         send failure the reply is queued to disk and the outbound loop keeps retrying until Telegram
         confirms. Order is preserved: if anything is already queued, this appends behind it."""
