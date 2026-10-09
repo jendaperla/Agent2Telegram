@@ -56,6 +56,8 @@ class Config:
     bot_username: str = ""              # the bot's @username (non-secret; for t.me/ deep links)
     require_mention: bool = False        # groups: only @bot mentions / replies to this bot
     reply_to_origin_chat: bool = False   # attach: answer in the chat the last authorized message came from
+    group_only_user_ids: list[int] = field(default_factory=list)   # allowed users accepted ONLY in groups
+    allowed_group_ids: list[int] = field(default_factory=list)     # if set, groups other than these are ignored
     language: str = "en"                # operational notices: en | cs (independent of STT)
     restart_notice: bool = False         # one startup notice, persisted 30-second cooldown
     restart_notice_text: str = ""        # optional short literal text, no formatting placeholders
@@ -94,6 +96,14 @@ class Config:
             raise ConfigError("'require_mention' must be a boolean.")
         if type(self.reply_to_origin_chat) is not bool:
             raise ConfigError("'reply_to_origin_chat' must be a boolean.")
+        owner = self.allowed_user_ids[0] if self.allowed_user_ids else None
+        if (not isinstance(self.group_only_user_ids, list)
+                or any(type(i) is not int or i not in self.allowed_user_ids or i == owner
+                       for i in self.group_only_user_ids)):
+            raise ConfigError("'group_only_user_ids' must list allowed users other than the owner.")
+        if (not isinstance(self.allowed_group_ids, list)
+                or any(type(i) is not int or i >= 0 for i in self.allowed_group_ids)):
+            raise ConfigError("'allowed_group_ids' must be a list of negative chat ids.")
         if type(self.restart_notice) is not bool:
             raise ConfigError("'restart_notice' must be a boolean.")
         if type(self.background_progress) is not bool:

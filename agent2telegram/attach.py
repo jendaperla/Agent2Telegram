@@ -1286,6 +1286,16 @@ class AttachBridge:
         if user_id not in self._allowed:
             self.tg.send_message(chat_id, "⛔ Not authorized.")
             return True
+        chat_type = (msg.get("chat") or {}).get("type")
+        in_group = chat_type in ("group", "supergroup")
+        groups = getattr(self.cfg, "allowed_group_ids", []) or []
+        if in_group:
+            log.info("IN  group chat=%s from=%s", chat_id, user_id)
+            if groups and chat_id not in groups:
+                return True                      # foreign group: silent, never routed
+        elif user_id in (getattr(self.cfg, "group_only_user_ids", []) or []):
+            self.tg.send_message(chat_id, "⛔ Not authorized here – please use the shared group.")
+            return True
 
         from .mentions import accepts_message
         if not accepts_message(self.cfg, msg):
