@@ -1290,6 +1290,9 @@ class AttachBridge:
         from .mentions import accepts_message
         if not accepts_message(self.cfg, msg):
             return True
+        if self.cfg.reply_to_origin_chat:
+            # Replies follow the chat the last AUTHORIZED message came from (DM or group).
+            self._owner_chat = chat_id
 
 
         # Bridge-level slash commands (e.g. /start, /help) are answered here instead of being
