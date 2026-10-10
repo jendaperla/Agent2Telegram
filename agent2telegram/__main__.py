@@ -25,6 +25,8 @@ def _setup_logging(verbose: bool) -> None:
         # Anything parsing this log must allow for the optional date prefix.
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+    from .redaction import install_log_redaction
+    install_log_redaction()
 
 
 def _cmd_run(args) -> int:

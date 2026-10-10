@@ -56,13 +56,14 @@ class GroupMarkerTests(unittest.TestCase):
                      reply_to_origin_chat=True, allowed_group_ids=[-500], group_marker="[skupina]")
         b = object.__new__(AttachBridge)
         b.cfg, b._owner_chat = cfg, 11
-        self.assertEqual(b._route_group_marker("[skupina] Ahoj všem"), "Ahoj všem")
-        self.assertEqual(b._owner_chat, -500)
+        self.assertEqual(b._route_group_marker("[skupina] Ahoj všem"), ("Ahoj všem", -500))
+        # Only this reply goes to the group; the turn's recipient stays the owner's DM.
+        self.assertEqual(b._owner_chat, 11)
 
     def test_no_marker_or_no_group_keeps_chat(self):
         cfg = Config(agent="claude-code", token="fixture:only", allowed_user_ids=[11], group_marker="[skupina]")
         b = object.__new__(AttachBridge)
         b.cfg, b._owner_chat = cfg, 11
-        self.assertEqual(b._route_group_marker("[skupina] x"), "[skupina] x")
-        self.assertEqual(b._route_group_marker("Ahoj"), "Ahoj")
+        self.assertEqual(b._route_group_marker("[skupina] x"), ("[skupina] x", 11))
+        self.assertEqual(b._route_group_marker("Ahoj"), ("Ahoj", 11))
         self.assertEqual(b._owner_chat, 11)

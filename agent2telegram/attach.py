@@ -80,6 +80,9 @@ QUEUE_ACK_COOLDOWN = 30.0
 # How many characters of a quoted message are passed to the agent. Enough to recognise, few
 # enough not to flood the prompt.
 REPLY_QUOTE_CHARS = 300
+# How long a message from another chat waits for the running turn before switching recipient.
+CHAT_SWITCH_MAX_WAIT = 1800.0
+CHAT_SWITCH_POLL = 0.5
 
 #: Jak dlouho po první reakci považovat tutéž reakci na tutéž zprávu za duplicitu.
 #: Telegram jich 2026-08-26 poslal šest během 13 sekund. Okno je krátké, aby se nezahodila
@@ -870,8 +873,11 @@ class AttachBridge:
         except OSError:
             pass
 
-    def _enqueue(self, text: str, key: str | None, *, turn_text: bool = True) -> None:
+    def _enqueue(self, text: str, key: str | None, *, turn_text: bool = True,
+                 chat: "int | None" = None) -> None:
         item = {"text": text, "key": key}
+        if chat is not None:
+            item["chat"] = chat
         if not turn_text:
             item["turn_text"] = False
         self._pending_send.append(item)
@@ -879,32 +885,45 @@ class AttachBridge:
         if turn_text:
             self._turn_text_sent = True
 
-    def _route_group_marker(self, text: str) -> str:
-        """A reply that starts with `group_marker` is sent to the first allowed group (the marker
-        itself is stripped). Without a configured marker AND group this is a no-op."""
+    def _route_group_marker(self, text: str) -> tuple[str, "int | None"]:
+        """Return (text, recipient) for one reply.
+
+        A reply that starts with `group_marker` goes to the first allowed group (marker stripped)
+        – but ONLY while the current turn belongs to the owner's own private chat. Model text must
+        never pick a recipient on its own: from a group turn, or from any other user's DM, the
+        marker is ignored and the reply stays where the turn came from (security audit
+        2026-10-10, finding bridge-reply-routing). The recipient is returned for THIS reply only;
+        `_owner_chat` is not changed, so later parts of the turn cannot drift into the group.
+        """
+        target = self._owner_chat
         marker = getattr(self.cfg, "group_marker", "") or ""
         groups = getattr(self.cfg, "allowed_group_ids", []) or []
         if not marker or not groups or not text:
-            return text
+            return text, target
         stripped = text.lstrip()
-        if stripped.lower().startswith(marker.lower()):
-            self._owner_chat = groups[0]
-            return stripped[len(marker):].lstrip()
-        return text
+        if not stripped.lower().startswith(marker.lower()):
+            return text, target
+        stripped = stripped[len(marker):].lstrip()
+        owner = self.cfg.allowed_user_ids[0] if self.cfg.allowed_user_ids else None
+        if owner is None or self._owner_chat != owner:
+            log.warning("group marker ignored: the turn is not from the owner's private chat")
+            return stripped, target
+        log.info("group marker → reply routed to the configured group")
+        return stripped, groups[0]
 
     def _send_final(self, text: str, key: str | None = None, *, turn_text: bool = True) -> None:
-        text = self._route_group_marker(text)
         """Forward one reply RELIABLY. Marks the dedup ledger only AFTER a confirmed send; on any
         send failure the reply is queued to disk and the outbound loop keeps retrying until Telegram
         confirms. Order is preserved: if anything is already queued, this appends behind it."""
-        if self._owner_chat is None or (not text and not getattr(self, "_pending_files", None)):
+        text, target = self._route_group_marker(text)
+        if target is None or (not text and not getattr(self, "_pending_files", None)):
             return
         if key and key in self._sent_keys:
             return
         # Voice-reply mode: speak the reply as a Telegram voice note. Best-effort ENHANCEMENT —
         # a too-long reply or ANY failure falls straight through to the durable TEXT path below,
         # so voice mode can NEVER make a reply not arrive (that is the whole point of v2).
-        if (turn_text and text and self._voice_reply_on()
+        if (turn_text and text and self._voice_reply_on() and target == self._owner_chat
                 and not (self.cfg.file_marker and self.cfg.file_marker.lower() in text.lower())):
             if len(text) > VOICE_MAX_CHARS:
                 text = f"{text}\n\n🗣️→📝 (too long to read aloud — sent as text)"
@@ -937,7 +956,7 @@ class AttachBridge:
             chunks = split_message(text) if text else []
             files = list(getattr(self, "_pending_files", []) or [])
             try:
-                outbox.enqueue(chunks, files, key)
+                outbox.enqueue(chunks, files, key, chat=target)
             except Exception as e:
                 log.error("could not persist the outgoing reply, falling back to the old path: %s", e)
             else:
@@ -949,13 +968,13 @@ class AttachBridge:
                 return
 
         if self._pending_send:                       # something already waiting → keep FIFO order
-            self._enqueue(text, key, turn_text=turn_text)
+            self._enqueue(text, key, turn_text=turn_text, chat=target)
             return
         try:
-            self.tg.send_message(self._owner_chat, text)
+            self.tg.send_message(target, text)
         except Exception as e:                        # network reset, 5xx after retries, etc.
             log.warning("forward failed → queued for re-delivery: %s", e)
-            self._enqueue(text, key, turn_text=turn_text)
+            self._enqueue(text, key, turn_text=turn_text, chat=target)
             return
         if key:
             self._mark_sent(key)
@@ -1006,10 +1025,14 @@ class AttachBridge:
             rec = outbox.head()
             if rec is None:
                 break
+            # The recipient was bound when the reply was queued. Using the CURRENT chat here sent a
+            # private reply into a group once a group message arrived in between (audit
+            # 2026-10-10). Legacy records without a stored chat keep the old behaviour.
+            chat = rec.chat if rec.chat is not None else self._owner_chat
             # Parts already confirmed by Telegram are NOT resent — only the remaining ones.
             for index, chunk in rec.pending_chunks:
                 try:
-                    self.tg.send_message(self._owner_chat, chunk)
+                    self.tg.send_message(chat, chunk)
                 except Exception as e:
                     log.warning("delivery of part %d still failing: %s", index, e)
                     return
@@ -1017,7 +1040,7 @@ class AttachBridge:
             vzdano = False
             for file_path in rec.pending_files:
                 try:
-                    self._send_one_file(file_path)
+                    self._send_one_file(file_path, chat)
                 except Exception as e:
                     # Bounded retries: without them one bad attachment (over the size limit,
                     # a deleted file, HTTP 400) would hold the head of the FIFO queue forever
@@ -1032,7 +1055,7 @@ class AttachBridge:
                         # review round. The whole record goes to dead-letter: it leaves the queue
                         # (so it does not clog it) but stays traceable, including which parts
                         # did get delivered.
-                        self._report_permanent_refusal(Path(file_path).name, str(e))
+                        self._report_permanent_refusal(Path(file_path).name, str(e), chat)
                         outbox.give_up(rec.record_id, f"attachment {file_path}: {e}")
                         log.error("attachment %s gave up after %d attempts → dead-letter",
                                   file_path, attempts)
@@ -1056,8 +1079,9 @@ class AttachBridge:
 
         while self._pending_send and self._owner_chat is not None:
             item = self._pending_send[0]
+            chat = item.get("chat", self._owner_chat)
             try:
-                self.tg.send_message(self._owner_chat, item.get("text", ""))
+                self.tg.send_message(chat, item.get("text", ""))
             except Exception as e:
                 log.warning("re-delivery still failing (%d queued): %s", len(self._pending_send), e)
                 return
@@ -1315,7 +1339,12 @@ class AttachBridge:
         if not accepts_message(self.cfg, msg):
             return True
         if self.cfg.reply_to_origin_chat:
-            # Replies follow the chat the last AUTHORIZED message came from (DM or group).
+            # Replies follow the chat the last AUTHORIZED message came from (DM or group). The
+            # session has ONE conversation, so a message from another chat must not switch the
+            # recipient while a turn is still answering the previous chat – the rest of that
+            # answer would land in the wrong conversation (audit 2026-10-10). Wait for the turn
+            # to end first; the inbound worker is FIFO, so order is preserved.
+            self._wait_for_turn_before_chat_switch(chat_id)
             self._owner_chat = chat_id
 
 
@@ -1358,6 +1387,21 @@ class AttachBridge:
             self._begin_turn()
             return self._inject(text)
         return True
+
+    def _wait_for_turn_before_chat_switch(self, chat_id: int) -> None:
+        active = getattr(self, "_turn_active", None)
+        if self._owner_chat == chat_id or active is None or not active.is_set():
+            return
+        log.info("IN  chat %s waits: a turn for another chat is still running", chat_id)
+        stop = getattr(self, "_stop", None)
+        deadline = time.monotonic() + CHAT_SWITCH_MAX_WAIT
+        while active.is_set() and not (stop is not None and stop.is_set()):
+            if time.monotonic() >= deadline:
+                # Loud, never silent: a turn stuck this long is itself an incident.
+                log.error("IN  chat switch after %.0fs: the previous turn never ended",
+                          CHAT_SWITCH_MAX_WAIT)
+                break
+            time.sleep(CHAT_SWITCH_POLL)
 
     def _prepend_reply_context(self, msg: dict, text: str) -> str:
         """When the user replies to a specific message, tell the agent which one.
@@ -2167,7 +2211,7 @@ class AttachBridge:
                 log.warning("file send failed (%s): %s", resolved.name, e)
                 self._send_final(f"⚠️ Couldn't send {resolved.name}: {e}", turn_text=False)
 
-    def _send_one_file(self, raw: str) -> None:
+    def _send_one_file(self, raw: str, chat: "int | None" = None) -> None:
         """Send one attachment from the durable outbox.
 
         Distinguishes two kinds of failure because they are handled oppositely:
@@ -2175,27 +2219,30 @@ class AttachBridge:
         done, else it would clog the queue forever. A send error is TRANSIENT and is let out,
         aby ji outbox zkusil znovu.
         """
+        if chat is None:
+            chat = self._owner_chat
         resolved, reason = self._safe_outbox_path(raw)
         if resolved is None:
-            self._ohlas_trvale_odmitnuti(Path(raw).name, reason)
+            self._report_permanent_refusal(Path(raw).name, reason, chat)
             return
         try:
-            self.tg.send_file(self._owner_chat, resolved)
+            self.tg.send_file(chat, resolved)
         except OSError as e:
             # The file vanished or can't be read — retrying won't fix it.
-            self._ohlas_trvale_odmitnuti(resolved.name, str(e))
+            self._report_permanent_refusal(resolved.name, str(e), chat)
         # Other errors (including TelegramError) are let out as transient. Classifying them
         # binarily proved a trap: an unclear error would either be dropped (message loss) or
         # retried forever (a clogged FIFO queue blocking every later reply — finding F2).
         # Instead of guessing, it is retried a BOUNDED number of times and then given up; the
         # outbox keeps the counter.
 
-    def _report_permanent_refusal(self, name: str, reason: str) -> None:
+    def _report_permanent_refusal(self, name: str, reason: str,
+                                  chat: "int | None" = None) -> None:
         """Report an attachment not worth retrying and treat it as done. A silent drop would be
         worse than a visible error — and a clogged queue worse still."""
         log.warning("refusing to send attachment %s: %s", name, reason)
         try:
-            self.tg.send_message(self._owner_chat, f"⚠️ Couldn't send {name}: {reason}")
+            self.tg.send_message(chat if chat is not None else self._owner_chat, f"⚠️ Couldn't send {name}: {reason}")
         except Exception as e:
             log.warning("could not report the rejected attachment: %s", e)
 

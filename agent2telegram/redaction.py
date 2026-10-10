@@ -60,3 +60,30 @@ def redact(value):
     except (ValueError,RecursionError):return _text(text)
     try:return json.dumps(_tree(parsed),ensure_ascii=False) if isinstance(parsed,(dict,list)) else _text(text)
     except RecursionError:return MASK
+
+
+class RedactingFilter:
+    """logging filter: mask credentials in EVERY log line before it is written.
+
+    Previews of inbound/outbound text are logged on purpose (they make incidents traceable), but a
+    user once pasted an API key into a message and the 40-character preview stored it in the log
+    (security audit 2026-10-10). Masking at the handler covers every present and future log call.
+    """
+
+    def filter(self, record):
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+        clean = _text(message)
+        if clean != message:
+            record.msg, record.args = clean, None
+        return True
+
+
+def install_log_redaction(logger=None):
+    import logging
+    root = logger or logging.getLogger()
+    for handler in root.handlers:
+        if not any(isinstance(f, RedactingFilter) for f in handler.filters):
+            handler.addFilter(RedactingFilter())

@@ -67,6 +67,8 @@ class Record:
     key: str | None = None
     sent_chunks: frozenset[int] = frozenset()
     sent_files: frozenset[str] = frozenset()
+    # Recipient bound when the record was created. None = legacy record (pre-binding).
+    chat: int | None = None
 
     @property
     def record_id(self) -> str:
@@ -192,6 +194,9 @@ def _record_from_data(data: dict[str, Any], expected_kind: str) -> Record:
     sent_chunks = data.get("sent_chunks", [])
     sent_files = data.get("sent_files", [])
     key = data.get("key")
+    chat = data.get("chat")
+    if chat is not None and (isinstance(chat, bool) or not isinstance(chat, int)):
+        raise CorruptRecordError("outbox chat is invalid")
     if not isinstance(chunks, list) or not all(isinstance(item, str) for item in chunks):
         raise CorruptRecordError("outbox chunks are invalid")
     if not isinstance(files, list) or not all(isinstance(item, str) for item in files):
@@ -221,6 +226,7 @@ def _record_from_data(data: dict[str, Any], expected_kind: str) -> Record:
         key=key,
         sent_chunks=sent_chunk_set,
         sent_files=sent_file_set,
+        chat=chat,
     )
 
 
@@ -635,6 +641,7 @@ class DurableOutbox(_DurableStore):
         chunks: list[str],
         files: list[str],
         key: str | None,
+        chat: int | None = None,
     ) -> str:
         if not isinstance(chunks, list) or not all(isinstance(item, str) for item in chunks):
             raise TypeError("chunks must be a list of strings")
@@ -650,6 +657,8 @@ class DurableOutbox(_DurableStore):
             raise ValueError("duplicate file paths cannot be acknowledged unambiguously")
         if key is not None and not isinstance(key, str):
             raise TypeError("key must be a string or None")
+        if chat is not None and (isinstance(chat, bool) or not isinstance(chat, int)):
+            raise TypeError("chat must be an int or None")
         if not chunks and not normalized_files:
             raise ValueError("an outbox record must contain a chunk or a file")
 
@@ -661,6 +670,7 @@ class DurableOutbox(_DurableStore):
                     if (
                         existing.chunks != tuple(chunks)
                         or existing.files != tuple(normalized_files)
+                        or existing.chat != chat
                     ):
                         raise RecordConflictError(
                             f"outbox key {key!r} already has different content"
@@ -681,6 +691,7 @@ class DurableOutbox(_DurableStore):
                 "chunks": list(chunks),
                 "files": normalized_files,
                 "key": key,
+                "chat": chat,
                 "sent_chunks": [],
                 "sent_files": [],
             }
