@@ -99,6 +99,36 @@ class ReplyBindingTests(unittest.TestCase):
         self.assertEqual(self.sent_to(), [GROUP, OWNER])
         self.assertEqual(self.b._owner_chat, OWNER)
 
+    def test_timeout_never_switches_while_the_old_turn_runs(self):
+        self.b._turn_active.set()
+        orig = (attach.CHAT_SWITCH_POLL, attach.CHAT_SWITCH_MAX_WAIT)
+        attach.CHAT_SWITCH_POLL, attach.CHAT_SWITCH_MAX_WAIT = 0.01, 0.0
+        try:
+            t = threading.Thread(target=self.b._handle, args=(msg(OTHER, GROUP, "supergroup"),))
+            t.start()
+            time.sleep(0.15)
+            self.assertEqual(self.b._owner_chat, OWNER)   # deadline passed, still no switch
+            self.b._inject.assert_not_called()
+            self.assertIn(GROUP, self.sent_to())            # the waiting chat was told, once
+            self.assertEqual(self.sent_to().count(GROUP), 1)
+            self.b._turn_active.clear()
+            t.join(2)
+        finally:
+            attach.CHAT_SWITCH_POLL, attach.CHAT_SWITCH_MAX_WAIT = orig
+        self.assertEqual(self.b._owner_chat, GROUP)
+
+    def test_legacy_record_without_chat_goes_to_owner_dm_not_current_chat(self):
+        self.b._outbox.enqueue(["stará odpověď"], [], None)        # pre-binding record
+        self.b._pending_send.append({"text": "stará legacy", "key": None})
+        self.b._owner_chat = GROUP
+        self.b._persist_queue = Mock()
+        self.b._flush_pending()
+        self.assertEqual(self.sent_to(), [OWNER, OWNER])
+
+    def test_same_content_without_chat_is_not_a_conflict(self):
+        self.b._outbox.enqueue(["a"], [], "k1")
+        self.b._outbox.enqueue(["a"], [], "k1", chat=OWNER)      # retry after upgrade
+
     def test_outbox_record_keeps_its_chat(self):
         rid = self.b._outbox.enqueue(["a"], [], None, chat=GROUP)
         self.assertEqual(self.b._outbox.head().chat, GROUP)
@@ -106,6 +136,29 @@ class ReplyBindingTests(unittest.TestCase):
 
 
 class LogRedactionTests(unittest.TestCase):
+    def test_traceback_is_masked(self):
+        key = "AIza" + "Sy" + "B" * 33
+        handler_out = []
+        log = logging.getLogger("redaction-test")
+        log.propagate = False
+        h = logging.Handler()
+        h.emit = lambda r: handler_out.append(logging.Formatter().format(r))
+        h.addFilter(RedactingFilter())
+        log.addHandler(h)
+        try:
+            raise ValueError(f"bad key {key}")
+        except ValueError:
+            log.exception("inbound worker error")
+        log.removeHandler(h)
+        self.assertNotIn(key[:20], handler_out[0])
+        self.assertIn("[REDACTED]", handler_out[0])
+
+    def test_unformattable_record_does_not_leak_args(self):
+        key = "AIza" + "Sy" + "C" * 33
+        rec = logging.LogRecord("x", logging.INFO, __file__, 1, "%d", (key,), None)
+        RedactingFilter().filter(rec)
+        self.assertNotIn(key[:20], rec.getMessage())
+
     def test_api_key_in_a_preview_is_masked(self):
         key = "AIza" + "Sy" + "A" * 33
         rec = logging.LogRecord("x", logging.INFO, __file__, 1, "IN  %r", (key[:40],), None)

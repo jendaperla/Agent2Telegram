@@ -967,14 +967,17 @@ class AttachBridge:
                     self._turn_text_sent = True
                 return
 
+        # Subclasses (sandbox-agent RoutedDelivery) override _enqueue with the original
+        # signature and bind the recipient themselves – pass `chat` only when it differs.
+        extra = {"chat": target} if target != self._owner_chat else {}
         if self._pending_send:                       # something already waiting → keep FIFO order
-            self._enqueue(text, key, turn_text=turn_text, chat=target)
+            self._enqueue(text, key, turn_text=turn_text, **extra)
             return
         try:
             self.tg.send_message(target, text)
         except Exception as e:                        # network reset, 5xx after retries, etc.
             log.warning("forward failed → queued for re-delivery: %s", e)
-            self._enqueue(text, key, turn_text=turn_text, chat=target)
+            self._enqueue(text, key, turn_text=turn_text, **extra)
             return
         if key:
             self._mark_sent(key)
@@ -1028,7 +1031,7 @@ class AttachBridge:
             # The recipient was bound when the reply was queued. Using the CURRENT chat here sent a
             # private reply into a group once a group message arrived in between (audit
             # 2026-10-10). Legacy records without a stored chat keep the old behaviour.
-            chat = rec.chat if rec.chat is not None else self._owner_chat
+            chat = rec.chat if rec.chat is not None else self._legacy_chat()
             # Parts already confirmed by Telegram are NOT resent — only the remaining ones.
             for index, chunk in rec.pending_chunks:
                 try:
@@ -1079,7 +1082,7 @@ class AttachBridge:
 
         while self._pending_send and self._owner_chat is not None:
             item = self._pending_send[0]
-            chat = item.get("chat", self._owner_chat)
+            chat = item.get("chat", self._legacy_chat())
             try:
                 self.tg.send_message(chat, item.get("text", ""))
             except Exception as e:
@@ -1388,6 +1391,14 @@ class AttachBridge:
             return self._inject(text)
         return True
 
+    def _legacy_chat(self) -> "int | None":
+        """Recipient of a queued record from before recipients were stored. Never the CURRENT
+        chat (that may be a group that wrote later): only the owner's DM, which is where every
+        reply went before group routing existed. Without reply_to_origin_chat nothing changes."""
+        if getattr(self.cfg, "reply_to_origin_chat", False) and self.cfg.allowed_user_ids:
+            return self.cfg.allowed_user_ids[0]
+        return self._owner_chat
+
     def _wait_for_turn_before_chat_switch(self, chat_id: int) -> None:
         active = getattr(self, "_turn_active", None)
         if self._owner_chat == chat_id or active is None or not active.is_set():
@@ -1395,12 +1406,19 @@ class AttachBridge:
         log.info("IN  chat %s waits: a turn for another chat is still running", chat_id)
         stop = getattr(self, "_stop", None)
         deadline = time.monotonic() + CHAT_SWITCH_MAX_WAIT
+        warned = False
+        # FAIL-CLOSED: the recipient never switches while the old turn is still active, however
+        # long it runs – a timeout that switched anyway re-opened the leak (audit 2026-10-10,
+        # second run). A long wait is reported loudly instead, once, to the waiting chat.
         while active.is_set() and not (stop is not None and stop.is_set()):
-            if time.monotonic() >= deadline:
-                # Loud, never silent: a turn stuck this long is itself an incident.
-                log.error("IN  chat switch after %.0fs: the previous turn never ended",
-                          CHAT_SWITCH_MAX_WAIT)
-                break
+            if not warned and time.monotonic() >= deadline:
+                warned = True
+                log.error("IN  chat %s still waiting after %.0fs: the previous turn has not ended",
+                          chat_id, CHAT_SWITCH_MAX_WAIT)
+                try:
+                    self.tg.send_message(chat_id, busy_text(self.cfg))
+                except Exception as e:
+                    log.warning("could not report the long wait: %s", e)
             time.sleep(CHAT_SWITCH_POLL)
 
     def _prepend_reply_context(self, msg: dict, text: str) -> str:

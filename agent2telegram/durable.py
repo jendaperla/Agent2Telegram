@@ -670,7 +670,8 @@ class DurableOutbox(_DurableStore):
                     if (
                         existing.chunks != tuple(chunks)
                         or existing.files != tuple(normalized_files)
-                        or existing.chat != chat
+                        or (existing.chat is not None and chat is not None
+                            and existing.chat != chat)
                     ):
                         raise RecordConflictError(
                             f"outbox key {key!r} already has different content"

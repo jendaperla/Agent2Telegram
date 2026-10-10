@@ -74,10 +74,27 @@ class RedactingFilter:
         try:
             message = record.getMessage()
         except Exception:
-            return True
-        clean = _text(message)
-        if clean != message:
-            record.msg, record.args = clean, None
+            # Unformattable record: never let its raw arguments reach the file.
+            record.msg, record.args = MASK, None
+            message = None
+        if message is not None:
+            clean = _text(message)
+            if clean != message:
+                record.msg, record.args = clean, None
+        # Tracebacks are appended by the formatter AFTER filters run, so a credential inside an
+        # exception message bypassed the mask (audit 2026-10-10, second run). Render it here,
+        # mask it, and hand the formatter only the masked text.
+        if record.exc_info:
+            import logging
+            try:
+                record.exc_text = _text(logging.Formatter().formatException(record.exc_info))
+            except Exception:
+                record.exc_text = MASK
+            record.exc_info = None
+        elif record.exc_text:
+            record.exc_text = _text(record.exc_text)
+        if record.stack_info:
+            record.stack_info = _text(record.stack_info)
         return True
 
 
