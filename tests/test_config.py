@@ -135,17 +135,18 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             load(Path(self.dir.name) / "nope.json")
 
+    def test_agent_commands_in_menu(self):
+        from types import SimpleNamespace
+        from agent2telegram.attach import BOT_COMMANDS, menu_commands
+        cfg = SimpleNamespace(agent_commands={"review": "Zkontroluj plán dne", "Posta": "Pošta a štítky",
+                                              "voice": "kolize s bridge", "bad-name": "neplatné"})
+        names = [c["command"] for c in menu_commands(cfg)]
+        self.assertEqual(names[:len(BOT_COMMANDS)], [c["command"] for c in BOT_COMMANDS])
+        self.assertIn("review", names)
+        self.assertIn("posta", names)
+        self.assertEqual(names.count("voice"), 1)
+        self.assertNotIn("bad-name", names)
+
 
 if __name__ == "__main__":
     unittest.main()
-
-
-def test_agent_commands_in_menu():
-    from types import SimpleNamespace
-    from agent2telegram.attach import menu_commands, BOT_COMMANDS
-    cfg = SimpleNamespace(agent_commands={"review": "Zkontroluj plán dne", "Posta": "Pošta a štítky",
-                                          "voice": "kolize s bridge", "bad-name": "neplatné"})
-    names = [c["command"] for c in menu_commands(cfg)]
-    assert names[:len(BOT_COMMANDS)] == [c["command"] for c in BOT_COMMANDS]
-    assert "review" in names and "posta" in names
-    assert names.count("voice") == 1 and "bad-name" not in names
