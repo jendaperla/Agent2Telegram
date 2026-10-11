@@ -29,6 +29,10 @@ class STTError(Exception):
     pass
 
 
+class EmptyTranscript(STTError):
+    """The audio was received fine but contained no speech (silent or accidental tap)."""
+
+
 #: Anything that looks like a credential is stripped before an upstream body is logged
 #: or shown to the user. ElevenLabs does not echo the key today, but an error body is
 #: attacker-influencable text on its way into a log and a chat message.
@@ -158,7 +162,7 @@ def transcribe_elevenlabs(audio: bytes, *, api_key: str, filename: str = "voice.
         raise STTError("ElevenLabs request failed")
     text = (payload.get("text") or "").strip()
     if not text:
-        raise STTError("transcription returned no text")
+        raise EmptyTranscript("transcription returned no text")
     return text
 
 
