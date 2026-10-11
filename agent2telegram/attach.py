@@ -2413,6 +2413,14 @@ class AttachBridge:
             return stt.transcribe(audio, api_key=self.cfg.elevenlabs_api_key,
                                   language=getattr(self.cfg, "elevenlabs_language", "") or None,
                                   filename=Path(fp).name or "voice.ogg")
+        except stt.EmptyTranscript:
+            # Silent or accidentally sent note: the user's side, not a bridge fault.
+            log.warning("voice note had no speech")
+            self._send_final(
+                "🎤 I couldn't hear any speech in that voice note. Please record it again.",
+                turn_text=False,
+            )
+            return None
         except Exception as e:
             log.error("transcription failed: %s", e)
             # This is an inbound voice-note failure, not agent output for the current turn.

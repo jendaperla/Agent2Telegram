@@ -199,6 +199,28 @@ class AttachInboundTests(unittest.TestCase):
         self.assertIn("timed out", b.tg.sent[0][1])
         self.assertFalse(b._turn_text_sent)
 
+    def test_silent_voice_note_gets_its_own_message_not_error(self):
+        b = _bridge()
+        b.cfg.elevenlabs_api_key = "fake-key"
+        b._turn_text_sent = False
+        orig = stt.transcribe
+
+        def empty_transcribe(*_a, **_kw):
+            raise stt.EmptyTranscript("transcription returned no text")
+
+        stt.transcribe = empty_transcribe
+        try:
+            with self.assertLogs("agent2telegram.attach", level="WARNING") as logs:
+                b._handle(_voice())
+        finally:
+            stt.transcribe = orig
+
+        self.assertEqual(b._session.injected, [])
+        self.assertEqual(len(b.tg.sent), 1)
+        self.assertIn("couldn't hear any speech", b.tg.sent[0][1])
+        self.assertFalse(any(r.startswith("ERROR") for r in logs.output))
+        self.assertFalse(b._turn_text_sent)
+
     def test_poll_thread_does_not_block_on_slow_stt(self):
         with tempfile.TemporaryDirectory() as d:
             b = _bridge(d)
