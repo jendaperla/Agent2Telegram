@@ -239,6 +239,15 @@ accepts only @mentions, commands addressed to that bot, and replies to its messa
 Other group messages are silently ignored, including receipt acknowledgments. Private chats
 are unchanged. The default is `false`; the authorized-user allowlist is always enforced.
 
+In attach mode, optional `"inbound_sender_label": true` adds sender/chat context immediately
+after `origin_prefix`: `[Od: Alex · DM]` or `[Od: Alex · skupina "Team"]`.
+Names come from the current Telegram sender, including voice messages, attachments and reactions;
+reply quotes do not replace the sender. Display names (64 characters) and group titles (80)
+are sanitized to one line without brackets, quotes or control characters.
+These user-controlled descriptions are not proof of identity or approval: authorization still
+uses Telegram user IDs. Routing is unchanged, and `notify` still targets the owner's DM.
+The default is `false`, preserving existing prompts.
+
 Operational notices: `"language": "cs"` translates the busy acknowledgment and the default
 startup notice into Czech (`"en"` is the default; this does not configure speech recognition).
 `"restart_notice": true` enables one short notice after successful bridge startup checks.

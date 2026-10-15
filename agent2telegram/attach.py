@@ -40,6 +40,7 @@ import re
 _UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 from .config import Config, _state_dir
 from .durable import DurableInbox, DurableOutbox
+from .inbound import sender_label
 from .notices import busy_text, restart_notice
 from .session import SessionError, TmuxSession
 from .telegram import TelegramClient, TelegramError, is_network_error, split_message
@@ -1313,10 +1314,13 @@ class AttachBridge:
                 self._begin_turn()
                 if not turn_running:
                     self._turn_is_reaction = True
-                return self._inject(
+                text = (
                     f"{emojis} reacted {emojis} to your message #{mr.get('message_id')} "
                     f"— quick feedback. Always answer, but with ONE very short line "
                     f"(a few words or an emoji), nothing more.")
+                if self.cfg.inbound_sender_label:
+                    text = f"{sender_label({'from': mr.get('user'), 'chat': mr.get('chat')})} {text}"
+                return self._inject(text)
             return True
 
         msg = upd.get("message") or upd.get("edited_message")
@@ -1384,6 +1388,8 @@ class AttachBridge:
                 # Tell the agent to write for the EAR, not the eye. This is the core of voice
                 # mode — the model phrases speakable text far better than any post-processing.
                 text = f"{VOICE_MODE_HINT}\n{text}"
+            if self.cfg.inbound_sender_label:
+                text = f"{sender_label(msg)} {text}"
             text = self._limit_inbound_prompt(text, chat_id)
             if not text:
                 return True

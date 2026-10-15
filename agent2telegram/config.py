@@ -51,6 +51,7 @@ class Config:
     signal_file: str = ""               # where the Stop hook writes the final answer
     transcript_path: str = ""           # agent transcript to tail for interim updates
     origin_prefix: str = "Telegram:"    # injected before each message; hook forwards only these
+    inbound_sender_label: bool = False  # attach: display sender/chat after origin_prefix
     claude_session_id: str = ""         # guard: only act on this session's transcript
     progress_marker: str = "[tg]"       # lines starting with this are sent live (interim)
     bot_username: str = ""              # the bot's @username (non-secret; for t.me/ deep links)
@@ -93,6 +94,8 @@ class Config:
         return base
 
     def validate(self) -> None:
+        if type(self.inbound_sender_label) is not bool:
+            raise ConfigError("'inbound_sender_label' must be a boolean.")
         if not isinstance(self.require_mention, bool):
             raise ConfigError("'require_mention' must be a boolean.")
         if type(self.reply_to_origin_chat) is not bool:
