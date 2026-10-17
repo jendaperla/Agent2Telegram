@@ -454,22 +454,24 @@ class InboundLogLineTests(unittest.TestCase):
                 b._handle_update_once(upd, 0)
             return [r.getMessage() for r in cm.records if r.getMessage().startswith("IN  ")]
 
-    def test_reply_context_and_preview_are_not_swapped(self):
+    def test_reply_id_and_message_fingerprint_preserve_correlation_without_content(self):
+        import hashlib
         upd = {
             "update_id": 1,
             "message": {
                 "message_id": 1, "from": {"id": 7}, "chat": {"id": 7},
                 "text": "fix this",
-                "reply_to_message": {"text": "daily report: 2 failures"},
+                "reply_to_message": {"message_id": 88, "text": "daily report: 2 failures"},
             },
         }
         lines = self._log_inbound(upd)
         self.assertTrue(lines, "the arrival of a message was not logged at all")
         line = lines[0]
-        self.assertIn("reply_to='daily report: 2 failures'", line,
-                      f"reply_to must carry the QUOTED message, got: {line}")
-        self.assertTrue(line.rstrip().endswith("'fix this'"),
-                        f"the line must end with the message itself, got: {line}")
+        self.assertIn("reply_to_id=88", line)
+        self.assertIn("message_id=1", line)
+        self.assertIn("sha256=" + hashlib.sha256(b"fix this").hexdigest()[:8], line)
+        self.assertNotIn("daily report: 2 failures", line)
+        self.assertNotIn("fix this", line)
 
 
 class ReactionDedupTests(unittest.TestCase):

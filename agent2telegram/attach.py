@@ -42,6 +42,7 @@ from .config import Config, _state_dir
 from .durable import DurableInbox, DurableOutbox
 from .inbound import sender_label
 from .notices import busy_text, restart_notice
+from .redaction import message_metadata, update_metadata
 from .session import SessionError, TmuxSession
 from .telegram import TelegramClient, TelegramError, is_network_error, split_message
 
@@ -788,7 +789,8 @@ class AttachBridge:
         try:
             update_id = int(raw_id)
         except (TypeError, ValueError):
-            log.warning("skipping malformed Telegram update without a valid update_id: %r", upd)
+            log.warning("skipping malformed Telegram update without a valid update_id: %s",
+                        update_metadata(upd))
             return offset
         next_offset = max(offset, update_id + 1) if update_id is not None else offset
         if update_id is not None and update_id < offset:
@@ -823,26 +825,9 @@ class AttachBridge:
         self._maybe_ack_queued(upd)
         # Log EVERY accepted incoming message. Without this, "I wrote and nothing happened"
         # cannot be answered from the log: there was no record that the message ever arrived
-        # (gap found 2026-08-02). Content is truncated and never includes attachments' bytes.
-        msg = upd.get("message") or upd.get("edited_message") or {}
-        if msg.get("voice") or msg.get("audio"):
-            kind = "voice"
-        elif msg.get("photo") or msg.get("document"):
-            kind = "file"
-        elif upd.get("message_reaction"):
-            kind = "reaction"
-        else:
-            kind = "text"
-        preview = (msg.get("text") or msg.get("caption") or "").replace("\n", " ")[:40]
-        # Whether it was a reply to a specific message matters for later diagnosis: the agent
-        # gets that context, so the log must show it too (otherwise the two cannot be matched up).
-        replied_to = msg.get("reply_to_message") or {}
-        quoted = (replied_to.get("text") or replied_to.get("caption") or "").replace("\n", " ")[:30]
-        if quoted:
-            log.info("IN  id=%s update=%s kind=%s reply_to=%r %r",
-                     record_id, update_id, kind, quoted, preview)
-        else:
-            log.info("IN  id=%s update=%s kind=%s %r", record_id, update_id, kind, preview)
+        # (gap found 2026-08-02). IDs and a full-text fingerprint preserve correlation without
+        # storing any message/quoted-message content or attachment bytes in the operational log.
+        log.info("IN  id=%s update=%s %s", record_id, update_id, update_metadata(upd))
         self._submit_inbound_update(upd, record_id)
         self._mark_update_processed(update_id)
         return next_offset
@@ -977,14 +962,16 @@ class AttachBridge:
         try:
             self.tg.send_message(target, text)
         except Exception as e:                        # network reset, 5xx after retries, etc.
-            log.warning("forward failed → queued for re-delivery: %s", e)
+            log.warning("forward failed → queued for re-delivery: error=%s %s",
+                        type(e).__name__, message_metadata(text))
             self._enqueue(text, key, turn_text=turn_text, **extra)
             return
         if key:
             self._mark_sent(key)
         if turn_text:
             self._turn_text_sent = True
-        log.info("FWD (send, legacy path) %r", text[:40].replace("\n", " "))
+        log.info("FWD (send, legacy path) id=%s %s", key,
+                 message_metadata(text, attachments=len(getattr(self, "_pending_files", []) or [])))
         self._flush_files()
 
     def _ensure_outbox(self) -> "DurableOutbox | None":
@@ -1038,7 +1025,8 @@ class AttachBridge:
                 try:
                     self.tg.send_message(chat, chunk)
                 except Exception as e:
-                    log.warning("delivery of part %d still failing: %s", index, e)
+                    log.warning("delivery of part %d still failing: error=%s %s",
+                                index, type(e).__name__, message_metadata(chunk))
                     return
                 outbox.mark_chunk_sent(rec.record_id, index)
             vzdano = False
@@ -1074,12 +1062,12 @@ class AttachBridge:
                 # marked, so they are not resent; the next cycle just tries to finish it.
                 return
             outbox.done(rec.record_id)
-            # The record id and a text preview are logged ON PURPOSE: on 2026-08-01 the user
+            # The record id and a content-free fingerprint are logged ON PURPOSE: the user
             # received one reply twice and the log could not tell whether it was the same
             # message delivered twice or two different ones. Without that, any fix is a guess.
-            preview = (rec.chunks[0][:40] if rec.chunks else "(files only)").replace("\n", " ")
-            log.info("FWD (delivered) id=%s %d parts, %d attachments %r",
-                     rec.record_id, len(rec.chunks), len(rec.files), preview)
+            log.info("FWD (delivered) id=%s %d parts, %s", rec.record_id, len(rec.chunks),
+                     message_metadata("".join(rec.chunks), kind="text" if rec.chunks else "file",
+                                      attachments=len(rec.files)))
 
         while self._pending_send and self._owner_chat is not None:
             item = self._pending_send[0]
@@ -1087,13 +1075,16 @@ class AttachBridge:
             try:
                 self.tg.send_message(chat, item.get("text", ""))
             except Exception as e:
-                log.warning("re-delivery still failing (%d queued): %s", len(self._pending_send), e)
+                log.warning("re-delivery still failing (%d queued): error=%s %s",
+                            len(self._pending_send), type(e).__name__,
+                            message_metadata(str(item.get("text", ""))))
                 return
             self._pending_send.pop(0)
             self._persist_queue()
             if item.get("key"):
                 self._mark_sent(item["key"])
-            log.info("FWD (re-delivered) %r", str(item.get("text", ""))[:30])
+            log.info("FWD (re-delivered) id=%s %s", item.get("key"),
+                     message_metadata(str(item.get("text", ""))))
 
     # ---- inbound (Telegram → session) -------------------------------------
     def _init_inbound_worker_state(self) -> None:
@@ -1169,7 +1160,8 @@ class AttachBridge:
             try:
                 delivered = self._handle(upd)
             except Exception as e:
-                log.exception("inbound worker error: %s", e)
+                log.error("inbound worker error: error=%s id=%s %s",
+                          type(e).__name__, record_id, update_metadata(upd))
                 self._inbound_failed(record_id, str(e))
             else:
                 # `_handle` returns False when the message never reached the session. Both cases
@@ -1260,7 +1252,7 @@ class AttachBridge:
                 try:
                     offset = self._handle_update_once(upd, offset)
                 except Exception as e:
-                    log.exception("inbound error: %s", e)
+                    log.error("inbound error: error=%s %s", type(e).__name__, update_metadata(upd))
 
     def _handle(self, upd: dict) -> bool:
         """Handle one update. Returns False ONLY when the message was not delivered to the session.
@@ -1540,7 +1532,7 @@ class AttachBridge:
                 last_error = e
                 if "refusing to inject" in str(e):
                     # The pane isn't running the expected agent — retrying won't help, only delay.
-                    log.error("inject failed: %s", e)
+                    log.error("inject failed: error=%s %s", type(e).__name__, message_metadata(text))
                     self._turn_active.clear()
                     self._notify_unsafe_pane(str(e))
                     return False
@@ -1548,7 +1540,9 @@ class AttachBridge:
                 last_error = e
             if attempt < INJECT_ATTEMPTS:
                 self._stop.wait(INJECT_RETRY_WAIT)
-        log.error("inject failed after %d attempts: %s", INJECT_ATTEMPTS, last_error)
+        # TimeoutExpired/CalledProcessError can include the entire send-keys argv (the message).
+        log.error("inject failed after %d attempts: error=%s %s", INJECT_ATTEMPTS,
+                  type(last_error).__name__, message_metadata(text))
         self._turn_active.clear()
         self._notify_inject_failed(text, str(last_error))
         return False
@@ -1571,9 +1565,10 @@ class AttachBridge:
             # Log it: without this the daily report sees "N injects failed" but cannot tell
             # whether the user was ever told. That is the exact blind spot delivery logging
             # was added to close (2026-08-04).
-            log.info("inject failure reported to the owner %r", preview[:40])
+            log.info("inject failure reported to the owner %s", message_metadata(text))
         except Exception as e:
-            log.warning("inject-failure notification failed: %s", e)
+            log.warning("inject-failure notification failed: error=%s %s",
+                        type(e).__name__, message_metadata(text))
 
     def _notify_unsafe_pane(self, reason: str) -> None:
         if not self._owner_chat:
@@ -1590,7 +1585,7 @@ class AttachBridge:
                 "Restart the agent in that tmux pane, then resend the message.",
             )
         except Exception as e:
-            log.warning("unsafe-pane owner notification failed: %s", e)
+            log.warning("unsafe-pane owner notification failed: error=%s", type(e).__name__)
 
     def _handle_command(self, text: str, chat_id: int, message_id: int | None = None) -> bool:
         """Answer a bridge-level slash command. Returns True if handled (don't forward to agent)."""
@@ -1665,7 +1660,8 @@ class AttachBridge:
             segments = tts.synthesize_long(spoken, api_key=key, voice_id=self.cfg.tts_voice_id,
                                            model_id=self.cfg.tts_model_id)
         except Exception as e:
-            log.warning("voice reply TTS failed: %s", e)
+            log.warning("voice reply TTS failed: error=%s %s", type(e).__name__,
+                        message_metadata(text, kind="voice"))
             return False
         tmpdir = tempfile.mkdtemp(prefix="a2t_voice_")
         try:
@@ -1694,10 +1690,11 @@ class AttachBridge:
                 log.warning("voice reply ffmpeg conversion failed (rc=%s)", r.returncode)
                 return False
             self.tg.send_voice(self._owner_chat, ogg_path, duration=_ogg_duration(ogg_path))
-            log.info("FWD (voice) %r", text[:30])
+            log.info("FWD (voice) %s", message_metadata(text, kind="voice", attachments=1))
             return True
         except Exception as e:
-            log.warning("voice reply send failed: %s", e)
+            log.warning("voice reply send failed: error=%s %s", type(e).__name__,
+                        message_metadata(text, kind="voice", attachments=1))
             return False
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
@@ -1908,8 +1905,8 @@ class AttachBridge:
                 # gets it twice — proven from the log on 2026-08-02 (ids 433fa145 / 52df94c3,
                 # same text, same second). The key makes the queue recognise the duplicate.
                 self._send_final(out, key=getattr(self, "_last_backstop_key", "") or None)
-                log.info("TURN END backstop → forwarded final answer from %s %r",
-                         source, out[:30])
+                log.info("TURN END backstop → forwarded final answer from %s %s",
+                         source, message_metadata(out))
             elif not self._turn_text_sent:
                 dur = time.monotonic() - self._turn_started
                 log.error("TURN END backstop: Telegram turn ended without an answer; "
@@ -2226,7 +2223,8 @@ class AttachBridge:
         for raw in paths:
             resolved, reason = self._safe_outbox_path(raw)
             if resolved is None:
-                log.warning("refusing to send %r: %s", raw, reason)
+                log.warning("refusing to send %s: %s",
+                            message_metadata(raw, kind="file", attachments=1), reason)
                 self._send_final(f"⚠️ Couldn't send {Path(raw).name}: {reason}", turn_text=False)
                 continue
             try:
@@ -2347,7 +2345,8 @@ class AttachBridge:
                 log.info("text carries %s outside a Telegram turn → forwarded anyway", self._marker)
             else:
                 if ev.kind == "text" and ev.text.strip() and ev.key not in self._sent_keys:
-                    log.info("text NOT forwarded (turn not from Telegram) %r", ev.text[:40])
+                    log.info("text NOT forwarded (turn not from Telegram) id=%s %s",
+                             ev.key, message_metadata(ev.text))
                 return
         if ev.kind == "text":
             out = self._strip_marker(ev.text)

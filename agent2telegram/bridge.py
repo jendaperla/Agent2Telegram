@@ -24,6 +24,7 @@ from pathlib import Path
 
 from . import __version__, adapters
 from .config import Config, _state_dir
+from .redaction import message_metadata, update_metadata
 from .telegram import TelegramClient, TelegramError, is_network_error
 
 log = logging.getLogger("agent2telegram.bridge")
@@ -104,13 +105,14 @@ class Bridge:
                 try:
                     update_id = int(upd["update_id"])
                 except (KeyError, TypeError, ValueError):
-                    log.warning("skipping malformed Telegram update without a valid update_id: %r", upd)
+                    log.warning("skipping malformed Telegram update without a valid update_id: %s",
+                                update_metadata(upd))
                     continue
                 offset = max(offset, update_id + 1)
                 try:
                     self._dispatch(upd)
                 except Exception as e:
-                    log.exception("dispatch error: %s", e)
+                    log.error("dispatch error: error=%s %s", type(e).__name__, update_metadata(upd))
             self._save_offset(offset)
         self._shutdown()
 
@@ -307,7 +309,8 @@ class Bridge:
             try:
                 reply = self.adapter.run(prompt, chat_dir=chat_dir, is_continuation=is_cont)
             except Exception as e:
-                log.error("agent run failed for chat %s: %s", chat_id, e)
+                log.error("agent run failed for chat %s: error=%s %s", chat_id,
+                          type(e).__name__, message_metadata(prompt, attachments=int(bool(task.attachment))))
                 self.tg.send_message(chat_id, f"⚠️ Agent error: {e}")
                 return
         try:
@@ -377,4 +380,5 @@ class _ChatWorker(threading.Thread):
             try:
                 self.bridge.process(self.chat_id, task)
             except Exception as e:  # belt and braces: a worker must never die silently
-                log.exception("worker %s crashed handling a message: %s", self.chat_id, e)
+                log.error("worker %s crashed handling a message: error=%s %s", self.chat_id,
+                          type(e).__name__, message_metadata(task.text, attachments=int(bool(task.attachment))))

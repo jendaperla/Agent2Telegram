@@ -1,4 +1,5 @@
 """Display-only defense in depth. Redact structured credentials before truncation."""
+import hashlib
 import json
 import re
 from urllib.parse import urlsplit, urlunsplit
@@ -62,12 +63,46 @@ def redact(value):
     except RecursionError:return MASK
 
 
+def message_metadata(text: str, *, kind: str = "text", attachments: int = 0) -> str:
+    """Content-free diagnostics. Short hashes correlate messages, not authenticate them.
+
+    Hash the complete, untruncated text; previews leak arbitrary private text even when no
+    credential pattern matches. A short unkeyed hash is not an anonymity guarantee.
+    """
+    digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()[:8]
+    return f"kind={kind} len={len(text)} attachments={attachments} sha256={digest}"
+
+
+def update_metadata(update: dict) -> str:
+    """Never format raw Telegram fields (including malformed IDs and quoted messages)."""
+    if not isinstance(update, dict):
+        return message_metadata("", kind="invalid_update")
+    msg = update.get("message") or update.get("edited_message") or {}
+    if not isinstance(msg, dict):
+        msg = {}
+    media = ("photo", "document", "video", "animation", "voice", "audio", "sticker")
+    count = sum(bool(msg.get(field)) for field in media)
+    kind = ("voice" if msg.get("voice") or msg.get("audio") else "file" if count
+            else "reaction" if update.get("message_reaction") else "text")
+    text = msg.get("text") or msg.get("caption") or ""
+    text = text if isinstance(text, str) else ""
+    reply = msg.get("reply_to_message") or {}
+    reply = reply if isinstance(reply, dict) else {}
+
+    def numeric_id(value):
+        return value if type(value) is int else None
+
+    return (f"message_id={numeric_id(msg.get('message_id'))} "
+            f"reply_to_id={numeric_id(reply.get('message_id'))} "
+            + message_metadata(text, kind=kind, attachments=count))
+
+
 class RedactingFilter:
     """logging filter: mask credentials in EVERY log line before it is written.
 
-    Previews of inbound/outbound text are logged on purpose (they make incidents traceable), but a
-    user once pasted an API key into a message and the 40-character preview stored it in the log
-    (security audit 2026-10-10). Masking at the handler covers every present and future log call.
+    Message call sites must use content-free metadata. This filter is defense in depth for
+    structured credentials in other diagnostics; it cannot recognize arbitrary private text
+    or truncated OAuth codes and must never be used to justify logging message previews.
     """
 
     def filter(self, record):
