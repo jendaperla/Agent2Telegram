@@ -7,6 +7,7 @@ import shlex
 import subprocess
 import tempfile
 import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -237,7 +238,8 @@ class ClaudeHookTests(unittest.TestCase):
         from test_reply_binding import make_bridge, msg, OWNER, OTHER, GROUP
         b = make_bridge(self.root)
         b._turn_active.set(); b._claude_hook_ready = False
-        b._last_activity = 0; b._turn_started = 0
+        # Absolute zero is not 'long ago' on a freshly booted CI runner (monotonic ~ uptime).
+        b._last_activity = b._turn_started = time.monotonic() - attach.IDLE_DONE - 1
         warned = threading.Event()
         b.tg.send_message.side_effect = lambda *_: warned.set()
         with patch.object(attach, 'CHAT_SWITCH_MAX_WAIT', 0), patch.object(attach, 'CHAT_SWITCH_POLL', .01):
