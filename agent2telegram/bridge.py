@@ -58,7 +58,7 @@ class Bridge:
         self._stop = threading.Event()
         self._workers: dict[int, "_ChatWorker"] = {}
         self._workers_lock = threading.Lock()
-        self._offset_file = _state_dir() / "offset"
+        self._offset_file = _state_dir(cfg) / "offset"
         # Continuity is tracked on disk (a marker per chat dir), so it survives a restart
         # and a fresh conversation resumes correctly instead of starting over.
 

@@ -16,10 +16,10 @@ PY="$(command -v python3 || command -v python || true)"
 run_uninstall() {
   [ -n "$PY" ] || return 1
   if "$PY" -m agent2telegram --version >/dev/null 2>&1; then
-    "$PY" -m agent2telegram uninstall --yes; return 0
+    "$PY" -m agent2telegram uninstall --yes; exit $?
   fi
   if [ -d "$HOME/.agent2telegram-src/agent2telegram" ]; then
-    env "PYTHONPATH=$HOME/.agent2telegram-src" "$PY" -m agent2telegram uninstall --yes; return 0
+    env "PYTHONPATH=$HOME/.agent2telegram-src" "$PY" -m agent2telegram uninstall --yes; exit $?
   fi
   return 1
 }
@@ -28,14 +28,7 @@ if run_uninstall; then
   exit 0
 fi
 
-# Fallback: the package is already gone but leftovers may remain — clean them by hand.
-say "Package not found — removing leftover files directly."
-pkill -f "agent2telegram run" 2>/dev/null || true
-command -v tmux >/dev/null 2>&1 && tmux kill-session -t a2t-bridge 2>/dev/null || true
-for d in "$HOME/.config/agent2telegram" \
-         "$HOME/.local/state/agent2telegram" \
-         "$HOME/.agent2telegram-src" \
-         "$HOME/start-a2t-bridge.sh"; do
-  if [ -e "$d" ]; then rm -rf "$d" && say "removed $d"; fi
-done
-say "Done. (If you installed via pip earlier, run: $PY -m pip uninstall -y agent2telegram)"
+# Without the package we cannot safely identify its processes or their owner.
+say "Package not found. No processes stopped and no files removed."
+say "Re-run install.sh --no-setup, then run agent2telegram uninstall --yes."
+exit 1

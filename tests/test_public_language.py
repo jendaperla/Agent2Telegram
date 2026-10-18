@@ -12,6 +12,7 @@ import tempfile
 import tokenize
 import unicodedata
 import unittest
+from unittest.mock import Mock, patch
 
 
 LOCALIZATIONS = {
@@ -73,6 +74,25 @@ def source_files(root):
 
 
 class PublicLanguageTests(unittest.TestCase):
+    def test_idle_fallback_logs_in_english(self):
+        from agent2telegram import attach
+        bridge = object.__new__(attach.AttachBridge)
+        bridge._stop = Mock()
+        bridge._stop.is_set.side_effect = [False, True]
+        bridge._pending_turn_end = False
+        bridge._turn_end = None
+        bridge._turn_active = Mock()
+        bridge._turn_active.is_set.return_value = True
+        bridge._last_activity = 0
+        for name in ("_maybe_reresolve", "_flush_pending", "_drain_transcript", "_drain_signal",
+                     "_end_turn", "_expire_background_status", "_replay_pending_inbound", "_beat"):
+            setattr(bridge, name, Mock())
+        with patch.object(attach.time, "monotonic", return_value=1000), \
+                self.assertLogs(attach.log, level="WARNING") as logs:
+            bridge._outbound_loop()
+        self.assertIn("turn ended after inactivity", " ".join(logs.output))
+        bridge._end_turn.assert_called_once_with()
+
     def test_source_archive_is_scanned_without_git_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -85,10 +85,22 @@ each turn-end to the right bridge. Your existing bots are left untouched. Name i
 
 ```bash
 python3 -m agent2telegram update             # git pull + restart every running bridge on the new code
+python3 -m agent2telegram update --no-restart # code only; restart with your existing supervisor
 ```
 
 Pulls the latest code into `~/.agent2telegram-src` and restarts each running bridge, preserving
 its own `--config` — no re-setup, no re-entering tokens.
+Automatic restart requires readable Linux process environments so each bot keeps its exact
+state path and environment. On macOS, or with an external supervisor, use `--no-restart`
+and restart only the bridge processes through that supervisor; keep the agent sessions running.
+Local source changes stop the update. A failed pull preserves the checkout.
+
+Source-archive installations update by re-running `install.sh`. Older installations without
+an archive marker are recognised at the standard `~/.agent2telegram-src` location; the old
+source is kept in a neighbouring `.backup.*` directory, including local files. Config and
+state are outside that source tree and remain unchanged. Review/remove old backups yourself.
+For unattended installation, use `bash install.sh --no-setup`; `--no-pip` installs only the
+stdlib launcher. A source clone is installed from its current checkout; pull updates explicitly.
 
 ---
 
@@ -168,9 +180,10 @@ One line — the exact mirror of the install one‑liner:
 curl -fsSL https://raw.githubusercontent.com/petrludwig-collab/Agent2Telegram/main/uninstall.sh | bash
 ```
 
-That stops any running bridge and removes **everything**: the config (token included), state,
-the source clone, the launcher, the Claude Code Stop hook, and the pip package — no leftovers,
-no manual steps. (If you prefer, the equivalent from a clone is `python3 -m agent2telegram
+Stop any custom keepalive/supervisor first. This stops the current user's bridges and removes
+the default config (token included), state, installed source, shell launcher, Claude Stop hook,
+and pip package. Agent tmux sessions, other users, custom source/state paths and archive backups
+are left untouched. (If you prefer, the equivalent from a clone is `python3 -m agent2telegram
 uninstall`; add `--yes` to skip the confirmation prompt.)
 
 ---
@@ -259,6 +272,11 @@ overrides the text with a literal single line, maximum 200 characters.
 The default is off. A host-state marker enforces a 30-second cooldown across process restarts,
 including failed/uncertain sends. The notice is not retried in a background loop; an uncertain
 Telegram acknowledgement can mean no visible notice. Keep a distinct state directory for each bot.
+
+New `setup`/`connect` configurations store an absolute `state_dir`; `connect` gives each named
+bridge its own directory. For existing configurations, the old shared default remains unchanged
+unless you explicitly set `state_dir` or `AGENT2TELEGRAM_STATE` (the environment wins). Preserve
+the existing directory and offset when upgrading; do not choose a new empty path for a live bot.
 
 Background progress (attach mode, Claude Code): `"background_progress": true` shows work that
 runs outside a Telegram turn. Running sub-agents (Claude Code writes them to

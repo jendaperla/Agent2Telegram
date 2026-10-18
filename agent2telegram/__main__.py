@@ -140,6 +140,7 @@ def _cmd_doctor(_args) -> int:
     print(f"agent '{cfg.agent}': {'✓ binary found' if ok else '✗ binary NOT found on PATH'}")
     if not cfg.allowed_user_ids:
         print("⚠️  allowed_user_ids is empty — the bot will refuse everyone.")
+        ok = False
     try:
         from .telegram import TelegramClient
         me = TelegramClient(cfg.token).get_me()
@@ -159,7 +160,7 @@ def _cmd_uninstall(args) -> int:
     from pathlib import Path
     from .config import DEFAULT_PATH
 
-    print("This stops any running Agent2Telegram bridge and removes its config + state.")
+    print("This stops this user's Agent2Telegram bridges and removes their default config + state.")
     if not args.yes:
         try:
             if input("Continue? (y/N): ").strip().lower() not in ("y", "yes"):
@@ -169,19 +170,44 @@ def _cmd_uninstall(args) -> int:
             print("Aborted — no terminal; rerun with --yes.")
             return 0
 
-    # 1) Stop running bridges (never this process — it's `uninstall`, not `run`).
+    # Inspect processes before any destructive step, then disable the default supervisor.
+    # Never kill tmux sessions: they may contain the user's agent, not a bridge.
+    # Custom supervisors must be disabled by their owner before uninstalling.
+    from .updater import _running_bridges, _wait_gone
+    try:
+        bridges = _running_bridges()
+    except RuntimeError as exc:
+        print(str(exc))
+        return 1
+    home = Path.home()
+    service = home / '.config/systemd/user/agent2telegram.service'
+    plist = home / 'Library/LaunchAgents/com.agent2telegram.bridge.plist'
+    if service.is_file():
+        if not shutil.which('systemctl'):
+            print('Cannot disable the user service without systemctl; files preserved.')
+            return 1
+        result = subprocess.run(['systemctl', '--user', 'disable', '--now', 'agent2telegram'], capture_output=True)
+        if result.returncode:
+            print('Could not disable the user service; files preserved.')
+            return 1
+        service.unlink()
+    if plist.is_file() and sys.platform == 'darwin':
+        result = subprocess.run(['launchctl', 'bootout', f'gui/{os.getuid()}', str(plist)], capture_output=True)
+        if result.returncode:
+            print('Could not unload the user service; files preserved.')
+            return 1
+        plist.unlink()
+
+    # Stop running bridges (never this process — it's `uninstall`, not `run`).
     killed = 0
-    if shutil.which("pgrep"):
+    for pid, _ in bridges:
         try:
-            out = subprocess.run(["pgrep", "-f", "agent2telegram run"],
-                                 capture_output=True, text=True, timeout=10)
-            for pid in out.stdout.split():
-                try:
-                    os.kill(int(pid), signal.SIGTERM)
-                    killed += 1
-                except (OSError, ValueError):
-                    pass
-        except (OSError, subprocess.SubprocessError):
+            os.kill(int(pid), signal.SIGTERM)
+            if not _wait_gone(pid):
+                print('Bridge did not stop; files preserved. Stop its supervisor and retry.')
+                return 1
+            killed += 1
+        except (OSError, ValueError):
             pass
     print(f"  stopped {killed} running bridge(s)" if killed else "  no running bridge found")
 
@@ -198,32 +224,47 @@ def _cmd_uninstall(args) -> int:
     except (OSError, json.JSONDecodeError, KeyError, TypeError):
         pass
 
-    # 3) Kill the tmux session that hosts the bridge (the installer/launcher uses 'a2t-bridge').
-    if shutil.which("tmux"):
-        subprocess.run(["tmux", "kill-session", "-t", "a2t-bridge"], capture_output=True)
+    for directory in {home / '.local/bin', *(Path(p) for p in os.environ.get('PATH', '').split(os.pathsep) if p)}:
+        launcher = directory / 'agent2telegram'
+        if home not in launcher.parents or not launcher.is_file() or launcher.is_symlink():
+            continue
+        try:
+            text = launcher.read_text()
+            if text.startswith('#!/bin/sh\n') and '-m agent2telegram "$@"' in text:
+                launcher.unlink()
+        except (OSError, UnicodeError):
+            pass
 
     # 4) Remove everything the installer created: config (token+ledger), state, the source clone
     #    and the launcher. All imports are already done, so deleting the clone we run from is safe.
-    home = Path.home()
     targets = [DEFAULT_PATH.parent, home / ".local" / "state" / "agent2telegram",
                home / ".agent2telegram-src", home / "start-a2t-bridge.sh"]
     for d in targets:
         try:
-            if d.is_dir():
-                shutil.rmtree(d, ignore_errors=True); print(f"  removed {d}")
+            if d.is_symlink():
+                d.unlink(); print(f"  removed link {d}")
+            elif d.is_dir():
+                shutil.rmtree(d); print(f"  removed {d}")
             elif d.exists():
                 d.unlink(); print(f"  removed {d}")
-        except OSError:
-            pass
+        except OSError as exc:
+            print(f'Could not remove {d.name}: {type(exc).__name__}')
+            return 1
 
     # 5) Remove the pip package too, if it was installed that way (no-op otherwise).
-    subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "agent2telegram"],
-                   capture_output=True)
-    print("\n✓ Agent2Telegram fully removed.")
+    result = subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "agent2telegram"],
+                            capture_output=True)
+    if result.returncode:
+        result = subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y",
+                                 "--break-system-packages", "agent2telegram"], capture_output=True)
+        if result.returncode:
+            print('Default files removed, but pip cleanup failed. Check the package in this Python environment.')
+            return 1
+    print("\n✓ Default installation removed. Custom source/state paths and supervisors are left for their owner.")
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="agent2telegram", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     from . import __version__
@@ -233,7 +274,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("setup", help="interactive setup wizard")
     cn = sub.add_parser("connect", help="connect one agent (tmux session) to a Telegram bot")
     cn.add_argument("--name", help="name for this bridge (its config file); default: the session name")
-    sub.add_parser("update", help="pull the latest code and restart the running bridge(s)")
+    update = sub.add_parser("update", help="pull the latest code and restart the running bridge(s)")
+    update.add_argument('--no-restart', action='store_true', help='update code only; keep supervisor-managed bridges running')
     se = sub.add_parser("set-elevenlabs", help="add the ElevenLabs API key (enables voice transcription)")
     se.add_argument("--config", help="path to a specific bridge config")
     run_p = sub.add_parser("run", help="start the bridge")
@@ -263,7 +305,7 @@ def main(argv: list[str] | None = None) -> int:
         return wizard.connect(name=getattr(args, "name", None))
     if args.command == "update":
         from . import updater
-        return updater.run()
+        return updater.run(no_restart=args.no_restart)
     if args.command == "set-elevenlabs":
         from . import wizard
         return wizard.set_elevenlabs(config=getattr(args, "config", None))
@@ -285,15 +327,22 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> int:
     try:
-        sys.exit(main())
+        return _main(argv)
     except KeyboardInterrupt:
-        sys.exit(130)
+        return 130
+    except EOFError:
+        print("\nSetup input ended; run setup from a terminal or provide all answers.", file=sys.stderr)
+        return 2
     except (SessionError, ConfigError) as e:
         # Missing tmux or a bad config is NOT a program crash — it is something the user has to
         # do. A traceback here only scares: a first-time installer reads "it broke" instead of
         # "install tmux". The exception's message already carries that advice, so show it on its
         # own. (From walking the install on a clean Ubuntu.)
         print(f"\n{e}\n", file=sys.stderr)
-        sys.exit(2)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

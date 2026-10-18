@@ -1026,7 +1026,7 @@ class AttachBridge:
                                 index, type(e).__name__, message_metadata(chunk))
                     return
                 outbox.mark_chunk_sent(rec.record_id, index)
-            vzdano = False
+            gave_up = False
             for file_path in rec.pending_files:
                 try:
                     self._send_one_file(file_path, chat)
@@ -1048,11 +1048,11 @@ class AttachBridge:
                         outbox.give_up(rec.record_id, f"attachment {file_path}: {e}")
                         log.error("attachment %s gave up after %d attempts → dead-letter",
                                   file_path, attempts)
-                        vzdano = True
+                        gave_up = True
                         break
                     return
                 outbox.mark_file_sent(rec.record_id, file_path)
-            if vzdano:
+            if gave_up:
                 continue          # the record is in dead-letter, the queue moves on
             if rec.key and not self._mark_sent(rec.key):
                 # The ledger write failed → the record STAYS in the queue. Delivered parts are
@@ -1087,7 +1087,7 @@ class AttachBridge:
     def _init_inbound_worker_state(self) -> None:
         self._inbound_queue = queue.Queue()
         self._inbound_worker_started = False
-        self._inbound_worker_lock = threading.Lock()
+        self._inbound_worker_lock = threading.RLock()
 
     def _ensure_inbound_worker_state(self) -> None:
         # Focused tests may construct the object without AttachBridge.__init__.
@@ -1096,7 +1096,7 @@ class AttachBridge:
         if not hasattr(self, "_inbound_worker_started"):
             self._inbound_worker_started = False
         if not hasattr(self, "_inbound_worker_lock"):
-            self._inbound_worker_lock = threading.Lock()
+            self._inbound_worker_lock = threading.RLock()
 
     def _start_inbound_worker(self) -> None:
         self._ensure_inbound_worker_state()
@@ -1108,9 +1108,19 @@ class AttachBridge:
 
     def _submit_inbound_update(self, upd: dict, record_id: str | None = None) -> None:
         self._start_inbound_worker()
-        if record_id:
-            self._inbound_inflight().add(record_id)
-        self._inbound_queue.put((upd, record_id))
+        self._ensure_inbound_worker_state()
+        with self._inbound_worker_lock:
+            if record_id:
+                if record_id in self._inbound_inflight():
+                    return
+                # Recovery can claim and even finish this record after reserve() but
+                # before the poller reaches submit (a receipt HTTP call is in between).
+                # Recheck disk under the same lock as completion, not a stale snapshot.
+                inbox = getattr(self, '_inbox', None)
+                if inbox is not None and not any(r.record_id == record_id for r in inbox.pending()):
+                    return
+                self._inbound_inflight().add(record_id)
+            self._inbound_queue.put((upd, record_id))
 
     def _inbound_inflight(self) -> set:
         """Records currently in flight in the in-memory queue. Without this bookkeeping a
@@ -1173,6 +1183,11 @@ class AttachBridge:
                 self._inbound_queue.task_done()
 
     def _inbound_done(self, record_id: str | None) -> None:
+        self._ensure_inbound_worker_state()
+        with self._inbound_worker_lock:
+            self._complete_inbound_record(record_id)
+
+    def _complete_inbound_record(self, record_id: str | None) -> None:
         # ORDER MATTERS. Removing the record from the in-flight set BEFORE deleting it from the
         # inbox leaves a window where it is "not in flight" and still "pending on disk" — and a
         # concurrent _replay_pending_inbound() lands exactly there and submits the message a
@@ -1267,10 +1282,9 @@ class AttachBridge:
             emojis = "".join(r.get("emoji", "") for r in mr.get("new_reaction", [])
                              if r.get("type") == "emoji")
             if emojis:
-                # Telegram can emit the SAME reaction several times in a row: on 2026-08-26 one
-                # ❤️ arrived as six separate updates within 13 seconds (update_id 36303177-182),
-                # so the agent was asked for a one-line answer six times and the user got a
-                # burst of cat emojis. The reaction itself is identified by chat + message +
+                # Telegram can redeliver the SAME reaction as multiple updates. Without
+                # deduplication each update would ask the agent for another reply.
+                # The reaction itself is identified by chat + message +
                 # emoji, so a repeat of that triple inside a short window is a duplicate, never
                 # a second opinion. This is identity matching, not guessing from content.
                 key = (mr.get("chat", {}).get("id"), mr.get("message_id"), emojis)
@@ -1450,15 +1464,15 @@ class AttachBridge:
         chat_id = (msg.get("chat") or {}).get("id")
         if chat_id is None:
             return
-        ted = time.monotonic()
+        now = time.monotonic()
         # MIND the default: `time.monotonic()` counts from SYSTEM start, so on a long-running
         # macOS it is a large number, but on a freshly booted Linux (container, server restart)
         # nearly zero. With a 0.0 default no ACK would be sent for the first 30 seconds there.
         # So None = "never yet", not zero.
-        posledni = getattr(self, "_last_queue_ack", None)
-        if posledni is not None and ted - posledni < QUEUE_ACK_COOLDOWN:
+        last_ack = getattr(self, "_last_queue_ack", None)
+        if last_ack is not None and now - last_ack < QUEUE_ACK_COOLDOWN:
             return
-        self._last_queue_ack = ted
+        self._last_queue_ack = now
         try:
             self.tg.send_message(chat_id, busy_text(self.cfg))
             # Must log: without a record you can't tell after an incident whether the ACK went
@@ -1956,11 +1970,11 @@ class AttachBridge:
                 #     if turn_active is unset (e.g. a restart mid-turn that would orphan a bubble).
                 #   * Fallback: force-end if the transcript went quiet too long (hook missing).
                 if self._pending_turn_end:
-                    zacatek = getattr(self, "_turn_begun_at", 0.0)
-                    if zacatek and time.monotonic() - zacatek < SUSPICIOUS_TURN_SECONDS:
+                    started = getattr(self, "_turn_begun_at", 0.0)
+                    if started and time.monotonic() - started < SUSPICIOUS_TURN_SECONDS:
                         log.warning("turn ending after %.1fs — suspiciously fast, a stale "
                                     "end-of-turn signal is the usual cause",
-                                    time.monotonic() - zacatek)
+                                    time.monotonic() - started)
                     self._finish_turn()
                 elif self._turn_end is not None and self._turn_end.exists():
                     self._end_turn()
@@ -1970,7 +1984,7 @@ class AttachBridge:
                     # messages vanished without a trace (audit finding C). Turn end now goes
                     # through one shared path regardless of what triggered it; the warning
                     # distinguishes "ended in silence" from "the hook reported it".
-                    log.warning("konec turnu podle ticha (%.0f s bez aktivity), hook se neozval",
+                    log.warning("turn ended after inactivity (%.0f s without activity); no hook signal",
                                 self._idle_limit())
                     self._end_turn()
                 self._expire_background_status()
@@ -2235,7 +2249,7 @@ class AttachBridge:
         Distinguishes two kinds of failure because they are handled oppositely:
         a path outside the allowed folders is a PERMANENT rejection — reported and treated as
         done, else it would clog the queue forever. A send error is TRANSIENT and is let out,
-        aby ji outbox zkusil znovu.
+        so the outbox can retry it.
         """
         if chat is None:
             chat = self._owner_chat

@@ -37,6 +37,7 @@ class Config:
     token: str                          # Telegram bot token
     allowed_user_ids: list[int] = field(default_factory=list)   # who may drive the agent
     workdir: str = ""                   # base dir for per-chat working directories
+    state_dir: str = ""                 # explicit opt-in; legacy default/offset stays unchanged
     command: list[str] | None = None    # optional override of the agent's first-turn command
     continue_command: list[str] | None = None   # optional override of the follow-up command
     agent_timeout: int = 600            # seconds before a single agent run is killed
@@ -77,7 +78,7 @@ class Config:
 
     def path_outbox(self) -> Path:
         """Default place to put files meant for Telegram."""
-        return _state_dir() / "outbox"
+        return _state_dir(self) / "outbox"
 
     def allowed_outbox_dirs(self) -> list[Path]:
         """Resolved allowlist. The default outbox is always in, extra dirs come from config."""
@@ -90,10 +91,12 @@ class Config:
         return dirs
 
     def path_workdir(self) -> Path:
-        base = Path(self.workdir).expanduser() if self.workdir else (_state_dir() / "chats")
+        base = Path(self.workdir).expanduser() if self.workdir else (_state_dir(self) / "chats")
         return base
 
     def validate(self) -> None:
+        if not isinstance(self.state_dir, str) or (self.state_dir and not Path(self.state_dir).expanduser().is_absolute()):
+            raise ConfigError("'state_dir' must be an absolute path or empty.")
         if type(self.inbound_sender_label) is not bool:
             raise ConfigError("'inbound_sender_label' must be a boolean.")
         if not isinstance(self.require_mention, bool):
@@ -167,12 +170,14 @@ def _state_dir(cfg=None) -> Path:
     env, a single install runs one bot) — while breaking upgrades of a running install: a fresh
     empty per-bot directory means the offset resets → the whole Telegram backlog replays and the
     durable queue in the old path is orphaned. A safe old→new migration is impossible from the
-    data (you can't tell which bot a shared directory belonged to). Failing loud via the lock is
-    simpler and safer. `cfg` stays in the signature for callers but no longer enters the path.
+    data (you can't tell which bot a shared directory belonged to). New wizard configs carry
+    an explicit state_dir, while older configs keep their exact previous path and offset.
     """
     env = os.environ.get("AGENT2TELEGRAM_STATE")
     if env:
         return Path(env).expanduser()
+    if cfg is not None and getattr(cfg, 'state_dir', ''):
+        return Path(cfg.state_dir).expanduser()
     return Path.home() / ".local" / "state" / "agent2telegram"
 
 

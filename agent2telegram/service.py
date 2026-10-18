@@ -11,10 +11,21 @@ We never write to system paths ourselves: no sudo, and the user reviews what wil
 from __future__ import annotations
 
 import shutil
+import os
+from xml.sax.saxutils import escape
 import sys
 from pathlib import Path
 
-from .config import config_path
+from .config import config_path, _state_dir
+
+
+def _environment() -> dict:
+    env = {'AGENT2TELEGRAM_CONFIG': str(config_path()),
+           'PYTHONPATH': str(Path(__file__).resolve().parents[1]),
+           'PATH': os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin')}
+    if os.environ.get('AGENT2TELEGRAM_STATE'):
+        env['AGENT2TELEGRAM_STATE'] = str(_state_dir())
+    return env
 
 
 def _python() -> str:
@@ -22,6 +33,9 @@ def _python() -> str:
 
 
 def systemd_unit() -> str:
+    def quote(value):
+        return '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%').replace('\n', '\\n') + '"'
+    environment = '\n'.join('Environment=' + quote(f'{k}={v}') for k, v in _environment().items())
     return f"""[Unit]
 Description=Agent2Telegram bridge
 After=network-online.target
@@ -29,10 +43,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart={_python()} -m agent2telegram run
+ExecStart={quote(_python())} -m agent2telegram run
 Restart=always
 RestartSec=5
-Environment=AGENT2TELEGRAM_CONFIG={config_path()}
+{environment}
 
 [Install]
 WantedBy=default.target
@@ -41,6 +55,7 @@ WantedBy=default.target
 
 def launchd_plist() -> str:
     home = Path.home()
+    environment = ''.join(f'<key>{k}</key><string>{escape(v)}</string>' for k, v in _environment().items())
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -49,14 +64,14 @@ def launchd_plist() -> str:
   <key>Label</key><string>com.agent2telegram.bridge</string>
   <key>ProgramArguments</key>
   <array>
-    <string>{_python()}</string><string>-m</string><string>agent2telegram</string><string>run</string>
+    <string>{escape(_python())}</string><string>-m</string><string>agent2telegram</string><string>run</string>
   </array>
   <key>EnvironmentVariables</key>
-  <dict><key>AGENT2TELEGRAM_CONFIG</key><string>{config_path()}</string></dict>
+  <dict>{environment}</dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardErrorPath</key><string>{home}/Library/Logs/agent2telegram.log</string>
-  <key>StandardOutPath</key><string>{home}/Library/Logs/agent2telegram.log</string>
+  <key>StandardErrorPath</key><string>{escape(str(home))}/Library/Logs/agent2telegram.log</string>
+  <key>StandardOutPath</key><string>{escape(str(home))}/Library/Logs/agent2telegram.log</string>
 </dict>
 </plist>
 """

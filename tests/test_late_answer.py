@@ -208,14 +208,14 @@ class TurnStartOffsetSurvivesANewTranscript(unittest.TestCase):
             b._turn_tpos = 12_345
             b.cfg.transcript_path = "auto"
             b._last_resolve = time.monotonic() - 10.0   # not 0.0: on this Python time.monotonic() starts near 0 at process start, and the 3 s guard would skip the re-resolve
-            novy = Path(d) / "novy.jsonl"
-            novy.write_text(_assistant("t1", "x") + "\n", "utf-8")
-            b._resolve_transcript = lambda: novy
+            new_path = Path(d) / "new.jsonl"
+            new_path.write_text(_assistant("t1", "x") + "\n", "utf-8")
+            b._resolve_transcript = lambda: new_path
             b._session_cwd = lambda: str(Path(d))
             b._maybe_reresolve()
-            self.assertEqual(b._transcript, novy, "the switch itself did not happen")
+            self.assertEqual(b._transcript, new_path, "the switch itself did not happen")
             self.assertNotEqual(b._turn_tpos, 12_345, "a stale offset from the previous transcript survived")
-            self.assertLessEqual(b._turn_tpos, novy.stat().st_size, "the offset points past the new file")
+            self.assertLessEqual(b._turn_tpos, new_path.stat().st_size, "the offset points past the new file")
 
 
 class IdleWindowDependsOnTheHook(unittest.TestCase):

@@ -12,7 +12,7 @@ from agent2telegram import stt, wizard
 class LanguageIsSent(unittest.TestCase):
     def _capture(self, **kw):
         """Run a transcription against a fake opener and return the request body."""
-        telo = {}
+        captured = {}
 
         class FakeResp:
             def __enter__(self_inner): return self_inner
@@ -21,11 +21,11 @@ class LanguageIsSent(unittest.TestCase):
 
         class FakeOpener:
             def open(self_inner, req, timeout=None):
-                telo["body"] = req.data.decode("utf-8", "replace")
+                captured["body"] = req.data.decode("utf-8", "replace")
                 return FakeResp()
 
         text = stt.transcribe_elevenlabs(b"audio", api_key="sk_x", opener=FakeOpener(), **kw)
-        return text, telo["body"]
+        return text, captured["body"]
 
     def test_language_appears_in_the_request(self):
         text, body = self._capture(language="cs")
@@ -43,14 +43,14 @@ class LanguageIsSent(unittest.TestCase):
         self.assertIn("scribe_v1", body)
 
     def test_dispatcher_passes_the_language_through(self):
-        videno = {}
+        seen = {}
         orig = stt.transcribe_elevenlabs
-        stt.transcribe_elevenlabs = lambda audio, **kw: videno.update(kw) or "x"
+        stt.transcribe_elevenlabs = lambda audio, **kw: seen.update(kw) or "x"
         try:
             stt.transcribe(b"a", api_key="sk_x", language="cs")
         finally:
             stt.transcribe_elevenlabs = orig
-        self.assertEqual(videno.get("language"), "cs")
+        self.assertEqual(seen.get("language"), "cs")
 
 
 class KeyShape(unittest.TestCase):

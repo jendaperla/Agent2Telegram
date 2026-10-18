@@ -63,7 +63,7 @@ class DurableInboxTests(unittest.TestCase):
     def test_same_update_reservation_is_idempotent_but_conflicts_are_loud(self):
         with tempfile.TemporaryDirectory() as td:
             inbox = DurableInbox(Path(td))
-            update = {"update_id": 7, "message": {"text": "stejne"}}
+            update = {"update_id": 7, "message": {"text": "same"}}
             first = inbox.reserve(update)
             self.assertEqual(inbox.reserve(dict(update)), first)
             with self.assertRaises(RecordConflictError):
@@ -208,7 +208,7 @@ class DurableOutboxTests(unittest.TestCase):
             root = Path(td)
             outbox = DurableOutbox(root)
             record_id = outbox.enqueue(
-                ["cast 0", "cast 1", "cast 2"],
+                ["part 0", "part 1", "part 2"],
                 ["/tmp/a.png", "/tmp/b.pdf"],
                 "turn-1",
             )
@@ -217,7 +217,7 @@ class DurableOutboxTests(unittest.TestCase):
             restarted = DurableOutbox(root)
             head = restarted.head()
             self.assertIsNotNone(head)
-            self.assertEqual(head.pending_chunks, ((1, "cast 1"), (2, "cast 2")))
+            self.assertEqual(head.pending_chunks, ((1, "part 1"), (2, "part 2")))
             self.assertEqual(head.pending_files, ("/tmp/a.png", "/tmp/b.pdf"))
             with self.assertRaises(InvalidTransitionError):
                 restarted.mark_chunk_sent(record_id, 2)
@@ -241,7 +241,7 @@ class DurableOutboxTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             outbox = DurableOutbox(root)
-            record_id = outbox.enqueue(["jedna"], [], None)
+            record_id = outbox.enqueue(["one"], [], None)
             outbox.mark_chunk_sent(record_id, 0)
 
             restarted = DurableOutbox(root)
@@ -264,9 +264,9 @@ class DurableOutboxTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             outbox = DurableOutbox(root)
-            first = outbox.enqueue(["prvni"], [], "a")
+            first = outbox.enqueue(["first"], [], "a")
             time.sleep(0.001)
-            second = outbox.enqueue(["druhy"], [], "b")
+            second = outbox.enqueue(["second"], [], "b")
 
             restarted = DurableOutbox(root)
             self.assertEqual(restarted.head().id, first)

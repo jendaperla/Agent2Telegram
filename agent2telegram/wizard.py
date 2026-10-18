@@ -31,10 +31,7 @@ ATTACH_SUPPORTED = {"claude-code", "codex"}
 
 def _ask(prompt: str, default: str = "") -> str:
     suffix = f" [{default}]" if default else ""
-    try:
-        ans = input(f"{prompt}{suffix}: ").strip()
-    except EOFError:
-        ans = ""
+    ans = input(f"{prompt}{suffix}: ").strip()
     return ans or default
 
 
@@ -249,6 +246,7 @@ def run() -> int:
         origin_prefix="[TG] ",
         progress_marker="[TG]",
         bot_username=me.get("username", ""),
+        state_dir=str(state),
     )
     if _yes("\nEnable voice messages via ElevenLabs Scribe?"):
         cfg.elevenlabs_api_key = _ask_secret("ElevenLabs API key (hidden)")
@@ -422,6 +420,7 @@ def connect(name: str | None = None) -> int:
         progress_marker="[TG]",
         claude_session_id=(_claude_session_id_for(session) if agent_cls.name == "claude-code" else ""),
         bot_username=me.get("username", ""),
+        state_dir=str(state),
     )
     path = save(cfg, cfg_path)
     print(f"\n✓ Saved bridge config to {path} (permissions 0600).")
