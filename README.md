@@ -90,10 +90,24 @@ python3 -m agent2telegram update --no-restart # code only; restart with your exi
 
 Pulls the latest code into `~/.agent2telegram-src` and restarts each running bridge, preserving
 its own `--config` — no re-setup, no re-entering tokens.
-Automatic restart requires readable Linux process environments so each bot keeps its exact
-state path and environment. On macOS, or with an external supervisor, use `--no-restart`
-and restart only the bridge processes through that supervisor; keep the agent sessions running.
-Local source changes stop the update. A failed pull preserves the checkout.
+The restart plan is checked **before** pulling changes. Linux restarts preserve each process's
+original environment. On macOS, a bridge owned by the `com.agent2telegram.bridge` launchd
+service restarts through `launchctl kickstart -k gui/<uid>/com.agent2telegram.bridge` (the PID
+must match). A standalone bridge can also restart from an absolute `--config` path when the
+file contains its token and explicit `state_dir`; unrelated bot overrides are not inherited.
+
+When the original environment cannot be recovered (for example an older, environment-only
+configuration on macOS), the source update succeeds with a **WARNING** and exit code 0.
+That bridge stays running on its previous code. The warning identifies its PID and prints
+a shell-quoted start command requiring the original config/state paths. Restart it with its
+original supervisor, or stop the standalone bridge and use that command in its original
+environment. Never guess a default state path: it can replay messages. For custom supervisors,
+prefer `--no-restart`. Agent/tmux sessions are never restarted.
+
+After a successful pull, missing bot usernames in saved configurations are backfilled with
+Telegram `getMe` before restart, including with `--no-restart`; existing usernames are kept.
+Local source changes or failed restart preflight stop the update before pulling. A failed pull
+preserves the checkout; a failed restart after a successful update is reported as an error.
 
 Source-archive installations update by re-running `install.sh`. Older installations without
 an archive marker are recognised at the standard `~/.agent2telegram-src` location; the old

@@ -13,8 +13,11 @@
   keep their previous state paths; `AGENT2TELEGRAM_STATE` still takes precedence.
 - Update disables Git credential prompts, checks for local changes, and retries failed pulls.
   `update --no-restart` supports supervisor-managed bridges. Automatic restarts preserve
-  each process's environment on Linux; platforms without readable process environments
-  require supervisor-managed restarts. Agent tmux sessions are never restarted.
+  each process's environment on Linux. Restart planning happens before pull; macOS supports
+  PID-matched launchd kickstart and standalone file-backed config/state. Unknown environments
+  keep running, with a successful source update and an explicit manual-restart warning.
+  Restore missing bot username backfill after pull, before restart. Agent tmux sessions are
+  never restarted.
 - Doctor fails when no user is authorized. Uninstall limits process selection to the
   current user's bridge processes and leaves tmux agents running. Service exports include
   the source import path and an explicitly selected state directory.

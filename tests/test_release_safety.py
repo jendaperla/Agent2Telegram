@@ -179,6 +179,8 @@ class ReleaseSafetyTests(unittest.TestCase):
     def test_restart_preserves_distinct_state_and_never_inherits_another_bot(self):
         with tempfile.TemporaryDirectory() as tmp, \
              patch.object(updater.Path, 'home', return_value=Path(tmp)), \
+             patch.object(updater, '_launchd_bridge', return_value=('', None)), \
+             patch.object(updater, '_running_bridges', return_value=[('123', '/tmp/b.json')]), \
              patch.object(updater, '_proc_env', return_value={
                  'AGENT2TELEGRAM_STATE': '/tmp/fixture-b', 'PATH': '/usr/bin',
                  'HOME': tmp, 'AGENT2TELEGRAM_CONFIG': '/tmp/b.json'}), \
@@ -186,7 +188,8 @@ class ReleaseSafetyTests(unittest.TestCase):
              patch.object(updater.subprocess, 'Popen') as start:
             start.return_value.poll.return_value = None
             with patch.object(updater.time, 'sleep'):
-                self.assertEqual(updater._restart([('123', '/tmp/b.json')], Path(tmp)), 1)
+                plans = updater._plan_restarts([('123', '/tmp/b.json')], Path(tmp))
+                self.assertEqual(updater._restart(plans, Path(tmp)), 1)
             self.assertEqual(start.call_args.kwargs['env']['AGENT2TELEGRAM_STATE'], '/tmp/fixture-b')
 
     def test_doctor_fails_with_no_authorized_user(self):

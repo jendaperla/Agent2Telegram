@@ -7,12 +7,15 @@ keeps all of its bots. No re-setup, no token re-entry.
 """
 from __future__ import annotations
 
+import json
 import os
+import re
 import shlex
 import signal
 import subprocess
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import agent2telegram
@@ -122,21 +125,105 @@ def _wait_gone(pid: str, timeout: float = 6.0) -> bool:
     return False
 
 
-def _restart(bridges: list[tuple[str, str | None]], src: Path) -> int:
-    state = Path.home() / ".local" / "state" / "agent2telegram"
-    state.mkdir(parents=True, exist_ok=True)
-    # Without /proc, a supervisor's environment cannot be reconstructed safely.
-    # Refuse before stopping ANY bridge; the owner can use their existing supervisor.
+@dataclass
+class RestartPlan:
+    pid: str
+    config: str | None
+    service: str = ''
+    env: dict = field(default_factory=dict, repr=False)
+
+
+def _launchd_bridge() -> tuple[str, str | None]:
+    """Only the documented per-user service, and only its actual top-level PID."""
+    if sys.platform != 'darwin':
+        return '', None
+    target = f'gui/{os.getuid()}/com.agent2telegram.bridge'
+    try:
+        result = subprocess.run(['launchctl', 'print', target], capture_output=True,
+                                text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError('Cannot inspect launchd; no bridges restarted.') from exc
+    if result.returncode:
+        # 113: service not loaded; 3: GUI domain does not exist (headless login).
+        if result.returncode not in (3, 113):
+            raise RuntimeError('Cannot inspect launchd service; no bridges restarted.')
+        return target, None
+    match = re.search(r'^\tpid = (\d+)\s*$', result.stdout, re.MULTILINE)
+    return target, match[1] if match else None
+
+
+def _file_environment(config: str | None) -> dict:
+    """Fallback for self-contained configs; never inherit another bot's overrides."""
+    from .config import Config, ConfigError
+    if not config or not Path(config).is_absolute():
+        return {}
+    try:
+        raw = json.loads(Path(config).read_text('utf-8'))
+        cfg = Config(**{k: v for k, v in raw.items() if k in Config.__dataclass_fields__})
+        cfg.validate()
+        if not cfg.state_dir:
+            return {}
+    except (OSError, ValueError, TypeError, AttributeError, ConfigError):
+        return {}
+    env = {k: v for k, v in os.environ.items()
+           if k in ('HOME', 'USER', 'LOGNAME', 'SHELL', 'PATH', 'TMPDIR', 'LANG', 'LC_ALL')}
+    env['AGENT2TELEGRAM_CONFIG'] = config
+    env['AGENT2TELEGRAM_STATE'] = str(Path(cfg.state_dir).expanduser())
+    return env
+
+
+def _plan_restarts(bridges: list[tuple[str, str | None]], src: Path) -> list[RestartPlan]:
+    """Inspect everything BEFORE pull. An unknown environment means manual restart."""
+    service, service_pid = _launchd_bridge() if bridges else ('', None)
     plans = []
     for pid, cfg in bridges:
-        env = _proc_env(pid)
-        if not env:
-            raise RuntimeError('Cannot recover the bridge environment; use update --no-restart '
-                               'and restart bridge processes through their supervisor.')
-        env['PYTHONPATH'] = str(src) + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
-        plans.append((pid, cfg, env))
+        if pid == service_pid:
+            plans.append(RestartPlan(pid, cfg, service=service))
+            continue
+        env = _proc_env(pid) or _file_environment(cfg)
+        if env:
+            env['PYTHONPATH'] = str(src) + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
+        plans.append(RestartPlan(pid, cfg, env=env))
+    return plans
+
+
+def _manual_restart(plan: RestartPlan, src: Path) -> None:
+    print(f'WARNING: source updated; bridge PID {plan.pid} is still on its previous code. '
+          'Its original environment could not be recovered.')
+    print('Use its original supervisor to restart ONLY this bridge; leave agent/tmux sessions running.')
+    print('For a manually started bridge, stop it first, then run this command in its original '
+          'environment. Required variables must contain its ORIGINAL config/state paths:')
+    config = shlex.quote(plan.config) if plan.config else (
+        '"${AGENT2TELEGRAM_CONFIG:?Set the original bridge config path}"')
+    state = '"${AGENT2TELEGRAM_STATE:?Set the original bridge state path}"'
+    argv = [sys.executable, '-m', 'agent2telegram', 'run']
+    if plan.config:
+        argv += ['--config', plan.config]
+    print(f'  PYTHONPATH={shlex.quote(str(src))} AGENT2TELEGRAM_CONFIG={config} '
+          f'AGENT2TELEGRAM_STATE={state} {shlex.join(argv)}')
+
+
+def _restart(plans: list[RestartPlan], src: Path) -> int:
+    # A keeper may have replaced a process during pull. Do not signal a stale selection.
+    current = set(_running_bridges())
+    for plan in plans:
+        if (plan.env or plan.service) and (plan.pid, plan.config) not in current:
+            raise RuntimeError('Bridge processes changed during update; restart through their supervisor.')
     restarted = 0
-    for pid, cfg, env in plans:
+    for plan in plans:
+        pid, cfg, env = plan.pid, plan.config, plan.env
+        if plan.service:
+            if _launchd_bridge() != (plan.service, pid):
+                raise RuntimeError('launchd bridge changed during update; no replacement started.')
+            result = subprocess.run(['launchctl', 'kickstart', '-k', plan.service],
+                                    capture_output=True, text=True, timeout=30)
+            if result.returncode:
+                raise RuntimeError(f'launchctl kickstart failed; retry: launchctl kickstart -k {plan.service}')
+            restarted += 1
+            continue
+        if not env:
+            _manual_restart(plan, src)
+            continue
         # Preserve the bridge's ORIGINAL environment (config selection, PYTHONPATH, PATH) so it
         # comes back identical — critical for env-configured / multi-bridge setups.
         try:
@@ -146,7 +233,10 @@ def _restart(bridges: list[tuple[str, str | None]], src: Path) -> int:
         if not _wait_gone(pid):
             raise RuntimeError('Old bridge did not exit; replacement not started.')
         argv = [sys.executable, "-m", "agent2telegram", "run"] + (["--config", cfg] if cfg else [])
-        logdir = Path(env.get('AGENT2TELEGRAM_STATE', state))
+        # Config state_dir also applies when a Linux process did not use an env override.
+        config_env = _file_environment(cfg or env.get('AGENT2TELEGRAM_CONFIG'))
+        logdir = Path(env.get('AGENT2TELEGRAM_STATE') or config_env.get('AGENT2TELEGRAM_STATE')
+                      or Path(env.get('HOME', str(Path.home()))) / '.local/state/agent2telegram')
         logdir.mkdir(parents=True, exist_ok=True)
         with open(logdir / 'run.log', 'a') as log:
             child = subprocess.Popen(argv, env=env, stdout=log, stderr=subprocess.STDOUT,
@@ -195,6 +285,7 @@ def run(*, no_restart: bool = False) -> int:
         if status.returncode or status.stdout.strip():
             print('Cannot update: source has local changes or git status failed. Files preserved.')
             return 1
+        plans = [] if no_restart else _plan_restarts(_running_bridges(), src)
         for attempt in range(3):
             r = subprocess.run(['git', '-C', str(src), 'pull', '--ff-only'],
                                capture_output=True, text=True, env=env, timeout=120)
@@ -202,6 +293,9 @@ def run(*, no_restart: bool = False) -> int:
                 break
             if attempt < 2:
                 time.sleep(2)
+    except RuntimeError as exc:
+        print(f'Update stopped before pull: {exc}')
+        return 1
     except (OSError, subprocess.SubprocessError) as exc:
         print(f'Update failed ({type(exc).__name__}); no bridges restarted.')
         return 1
@@ -216,18 +310,17 @@ def run(*, no_restart: bool = False) -> int:
                                "--break-system-packages", "--upgrade", str(src)], capture_output=True).returncode != 0:
                 print('Package installation failed; no bridges restarted. Re-run install.sh to repair.')
                 return 1
+    _backfill_usernames()
     if no_restart:
         print('✓ Source updated. Running bridges unchanged; restart them through their supervisor.')
         return 0
-    try:
-        bridges = _running_bridges()
-    except RuntimeError as exc:
-        print(f'✗ {exc}')
-        return 1
-    if bridges:
+    if plans:
         try:
-            n = _restart(bridges, src)
-        except RuntimeError as exc:
+            n = _restart(plans, src)
+        except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+            # Do not include subprocess output/environment, which may contain credentials.
+            if not isinstance(exc, RuntimeError):
+                exc = f'Restart failed ({type(exc).__name__}); check the bridge supervisor.'
             print(f'✗ {exc}')
             return 1
         print(f"✓ Updated and restarted {n} bridge(s) on the new code.")
