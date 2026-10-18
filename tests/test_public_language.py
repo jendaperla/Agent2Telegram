@@ -5,8 +5,10 @@ Unicode transport tests use language-neutral text rather than private examples.
 """
 import ast
 import io
+import os
 from pathlib import Path
 import subprocess
+import tempfile
 import tokenize
 import unicodedata
 import unittest
@@ -54,12 +56,36 @@ def violations(path, text):
     return [f"{path}:{n}" for n, line in enumerate(lines, 1) if set(line) & ACCENTS]
 
 
+def source_files(root):
+    # git archive / GitHub source downloads have no repository metadata. Still
+    # scan their source; do not skip the guard or accidentally scan a parent repo.
+    if (root / ".git").exists():
+        return sorted(set(subprocess.check_output(
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=root
+        ).decode().split("\0")) - {""})
+    names = []
+    for directory, folders, files in os.walk(root):
+        folders[:] = [name for name in folders if name not in (
+            ".git", "build", "dist", "__pycache__", ".venv", "venv", ".pytest_cache"
+        ) and not name.endswith(".egg-info")]
+        names.extend(str((Path(directory) / name).relative_to(root)) for name in files)
+    return sorted(names)
+
+
 class PublicLanguageTests(unittest.TestCase):
+    def test_source_archive_is_scanned_without_git_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "README.md").write_text(chr(382), encoding="utf-8")
+            (root / "build").mkdir()
+            (root / "build/generated.py").write_text(chr(382), encoding="utf-8")
+            names = source_files(root)
+            self.assertEqual(names, ["README.md"])
+            self.assertTrue(violations(names[0], (root / names[0]).read_text()))
+
     def test_repository_only_contains_explicit_czech_localization(self):
         root = Path(__file__).resolve().parents[1]
-        names = subprocess.check_output(
-            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=root
-        ).decode().split("\0")
+        names = source_files(root)
         failures = []
         for name in sorted(set(names) - {""}):
             path = root / name
@@ -82,4 +108,3 @@ class PublicLanguageTests(unittest.TestCase):
         self.assertTrue(violations(path, repr(value + " extra")))
         self.assertTrue(violations("README.md", chr(382)))
         self.assertTrue(violations("README.md", "z" + chr(780)))
-
