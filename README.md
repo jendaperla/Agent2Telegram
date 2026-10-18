@@ -64,6 +64,21 @@ curl -fsSL https://raw.githubusercontent.com/petrludwig-collab/Agent2Telegram/ma
 Codex needs no extra setup — its rollout log records turn boundaries. For Claude Code the wizard
 also registers the end-of-turn **Stop hook** automatically.
 
+Manual Claude attach configurations are covered too: `run` checks and registers the Stop
+hook in the active user settings (`CLAUDE_CONFIG_DIR/settings.json`, or
+`~/.claude/settings.json`). Registration is atomic and idempotent, preserves other settings,
+and recognises custom Python hooks that write this bridge's `turn_end` marker using a
+literal path. Invalid/unreadable settings and disabled hooks produce a warning and are
+left untouched. Project/managed policy overrides and dynamically computed custom hook
+paths still need manual inspection.
+
+`doctor --config /path/to/config.json` reports a missing hook. To repair it without starting
+a second bridge, use `python3 -m agent2telegram claude-hook --config /path/to/config.json`,
+then **resume the same Claude session** to load it. Registration never restarts your agent.
+Until the bridge observes a Stop marker, 90 seconds without transcript activity suppresses
+busy acknowledgements and typing. This only changes the indicator: the reply window and
+cross-chat ownership guard stay in place, so a late answer retains its original destination.
+
 You get the same live UX both ways: progress messages kept, a one-line italic status bubble for
 tool calls that trails at the bottom and clears at the end, and a `typing…` indicator that stays
 lit for the whole turn.

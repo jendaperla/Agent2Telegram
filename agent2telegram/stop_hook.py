@@ -45,7 +45,9 @@ def _all_cfgs() -> list[dict]:
     if d.is_dir():
         for p in sorted(d.glob("*.json")):
             try:
-                out.append(json.loads(p.read_text("utf-8")))
+                item = json.loads(p.read_text("utf-8"))
+                if isinstance(item, dict):
+                    out.append(item)
             except Exception:
                 pass
     return out
@@ -70,10 +72,15 @@ def main() -> None:
         return
     base = os.path.basename(path)
 
-    cfgs = [c for c in _all_cfgs() if c.get("signal_file")]
+    def eligible(c):
+        # Legacy configs omitted agent/mode. Never finish a Codex turn from a Claude hook.
+        return (isinstance(c, dict) and c.get('agent', 'claude-code') == 'claude-code'
+                and c.get('mode', 'attach') == 'attach' and c.get('signal_file'))
+
+    cfgs = [c for c in _all_cfgs() if eligible(c)]
     if not cfgs:                                   # legacy: just the env/default config
         c = _load_cfg()
-        if c.get("signal_file"):
+        if eligible(c):
             cfgs = [c]
 
     # A config with a session guard fires only for ITS session. If none matched (e.g. a single

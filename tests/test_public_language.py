@@ -20,6 +20,7 @@ LOCALIZATIONS = {
     "agent2telegram/notices.py": {
         "⚡ Zprávu mám. Dostanu se k ní, jakmile dokončím rozpracovaný úkol.",
         "🔄 Most je znovu připojený.",
+        '⏳ Zpráva čeká ve frontě na potvrzení konce předchozího tahu. Směrování odpovědi zůstává chráněné.',
     },
     "agent2telegram/background.py": {"🤖 Na pozadí", "+{n} další", "⏳ pracuje…"},
     "tests/test_notices.py": {"🔄 Most je znovu připojený.", "Zprávu mám"},
@@ -77,6 +78,8 @@ class PublicLanguageTests(unittest.TestCase):
     def test_idle_fallback_logs_in_english(self):
         from agent2telegram import attach
         bridge = object.__new__(attach.AttachBridge)
+        from types import SimpleNamespace
+        bridge.cfg = SimpleNamespace(agent='generic')
         bridge._stop = Mock()
         bridge._stop.is_set.side_effect = [False, True]
         bridge._pending_turn_end = False

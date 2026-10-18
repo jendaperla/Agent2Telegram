@@ -2,6 +2,12 @@
 
 ## 1.2.1 – 2026-10-18
 
+- Claude attach startup and setup share atomic, idempotent Stop-hook registration, honour
+  `CLAUDE_CONFIG_DIR`, and preserve recognised custom marker hooks. Doctor checks hook
+  coverage; `claude-hook --config ...` repairs it without starting another bridge.
+  Resume the same Claude session to load a newly registered hook. Unconfirmed hooks no
+  longer cause stale busy acknowledgements/typing after 90 seconds of transcript silence;
+  late-answer delivery and cross-chat ownership remain unchanged.
 - Default sender labels, comments, documentation, and operational logs are English.
   Explicit `language: "cs"` retains the existing Czech labels and notices.
 - Public-language regression checks also work in source archives without Git metadata.

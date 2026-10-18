@@ -21,6 +21,12 @@ def busy_text(cfg):
     return "⚡ Got your message. I'll get to it as soon as I finish what I'm on."
 
 
+def waiting_for_turn_end_text(cfg):
+    if getattr(cfg, 'language', 'en') == 'cs':
+        return '⏳ Zpráva čeká ve frontě na potvrzení konce předchozího tahu. Směrování odpovědi zůstává chráněné.'
+    return '⏳ Your message is queued until the previous turn confirms completion. Reply routing stays protected.'
+
+
 def restart_notice(bridge, chat_id):
     """Call once after startup checks, never from the poll/health loop.
 

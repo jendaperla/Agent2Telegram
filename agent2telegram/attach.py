@@ -275,6 +275,8 @@ class AttachBridge:
         # long thinking and off exactly at turn end). Codex needs none — its rollout records
         # task_complete, so the reader signals turn end directly.
         self._turn_end = (self._signal.parent / "turn_end") if self._signal else None
+        # Registration alone does not prove that the running Claude session loaded its hook.
+        self._claude_hook_ready = cfg.agent != 'claude-code'
         # Outbound-loop heartbeat: touched at the end of every forward cycle (see _outbound_loop).
         # The process and the inbound poller can stay alive while forwarding is wedged — a blocking
         # send or a persistent exception freezes replies silently. A watchdog notices this file go
@@ -1425,7 +1427,9 @@ class AttachBridge:
                 log.error("IN  chat %s still waiting after %.0fs: the previous turn has not ended",
                           chat_id, CHAT_SWITCH_MAX_WAIT)
                 try:
-                    self.tg.send_message(chat_id, busy_text(self.cfg))
+                    from .notices import waiting_for_turn_end_text
+                    self.tg.send_message(chat_id, busy_text(self.cfg) if self._busy_for_notice()
+                                         else waiting_for_turn_end_text(self.cfg))
                 except Exception as e:
                     log.warning("could not report the long wait: %s", e)
             time.sleep(CHAT_SWITCH_POLL)
@@ -1452,8 +1456,8 @@ class AttachBridge:
         The bridge writes this operational notice in cfg.language, independently of STT
         and of the model's own responses. The default preserves existing English behavior.
         """
-        if not self._turn_active.is_set():
-            log.debug("ACK not sent: no turn in progress")
+        if not self._busy_for_notice():
+            log.debug("ACK not sent: no recent evidence of work in progress")
             return
         msg = upd.get("message") or upd.get("edited_message") or {}
         if msg.get("from", {}).get("id") not in self._allowed:
@@ -1480,6 +1484,19 @@ class AttachBridge:
             log.info("receipt ACK sent (another turn is running)")
         except Exception as e:
             log.warning("could not send the receipt ACK: %s", e)
+
+    def _busy_for_notice(self) -> bool:
+        """Display-only confidence: never close a turn or release its destination on silence.
+
+        Without an observed Claude Stop hook, 90 seconds of silence is ambiguous. Suppress
+        busy/typing then, but retain the long delivery window and cross-chat ownership lock.
+        New transcript activity restores the indicator; an actual hook confirms the lifecycle.
+        """
+        if not self._turn_active.is_set():
+            return False
+        if getattr(self, '_claude_hook_ready', True):
+            return True
+        return time.monotonic() - max(self._last_activity, self._turn_started) < IDLE_DONE
 
     def _begin_turn(self) -> None:
         # Light "typing…" from the actual injection point.
@@ -1765,7 +1782,7 @@ class AttachBridge:
         cause of mid-turn typing gaps. It stops the instant the turn ends (turn_active cleared), so
         no action fires after the final message and typing stops with it (bar Telegram's ~5s decay)."""
         while not self._stop.is_set():
-            if self._turn_active.is_set() and self._turn_from_tg and self._owner_chat is not None:
+            if self._busy_for_notice() and self._turn_from_tg and self._owner_chat is not None:
                 now = time.monotonic()
                 gap = now - self._last_typing
                 if gap > self._max_gap:
@@ -1977,6 +1994,7 @@ class AttachBridge:
                                     time.monotonic() - started)
                     self._finish_turn()
                 elif self._turn_end is not None and self._turn_end.exists():
+                    self._claude_hook_ready = True
                     self._end_turn()
                 elif self._turn_active.is_set() and time.monotonic() - self._last_activity > self._idle_limit():
                     # This branch used to just close the turn: the backstop didn't run, so the
@@ -1986,6 +2004,8 @@ class AttachBridge:
                     # distinguishes "ended in silence" from "the hook reported it".
                     log.warning("turn ended after inactivity (%.0f s without activity); no hook signal",
                                 self._idle_limit())
+                    if self.cfg.agent == 'claude-code':
+                        self._claude_hook_ready = False
                     self._end_turn()
                 self._expire_background_status()
                 # Live retry: messages that failed to deliver are retried while running too.

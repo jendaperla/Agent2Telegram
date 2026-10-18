@@ -203,22 +203,12 @@ def _capture_owner_id(token: str, bot_username: str) -> int | None:
 
 
 # ---------------------------------------------------------------- Claude Stop hook
-def _register_claude_hook() -> None:
-    """Add the end-of-turn Stop hook to ~/.claude/settings.json (idempotent, non-destructive)."""
-    settings = Path.home() / ".claude" / "settings.json"
-    cmd = f"{sys.executable} -m agent2telegram.stop_hook"
-    try:
-        data = json.loads(settings.read_text("utf-8")) if settings.exists() else {}
-        hooks = data.setdefault("hooks", {}).setdefault("Stop", [])
-        already = json.dumps(hooks).find("agent2telegram.stop_hook") != -1
-        if not already:
-            hooks.append({"matcher": "", "hooks": [{"type": "command", "command": cmd, "timeout": 15}]})
-            settings.parent.mkdir(parents=True, exist_ok=True)
-            settings.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        print(f"  ✓ Stop hook registered in {settings}")
-    except (OSError, json.JSONDecodeError) as e:
-        print(f"  ⚠️  Couldn't auto-register the Stop hook ({e}). Add this to {settings} under "
-              f'hooks.Stop manually:\n      {{"type":"command","command":"{cmd}"}}')
+def _register_claude_hook(cfg=None, path=None) -> None:
+    from .claude_hooks import register
+    result = register(cfg, path)
+    print(f"  {'⚠️' if result == 'error' else '✓'} Claude Stop hook: {result}.")
+    if result == 'registered':
+        print('  Resume the same Claude session to load the new hook.')
 
 
 # ---------------------------------------------------------------- run
@@ -257,7 +247,7 @@ def run() -> int:
     if agent_cls.name == "codex":
         print("  ✓ Codex needs no hook — turn boundaries come from its rollout log.")
     elif agent_cls.name == "claude-code":
-        _register_claude_hook()
+        _register_claude_hook(cfg, path)
 
     if not cfg.allowed_user_ids:
         print("⚠️  No authorized user — add your id to 'allowed_user_ids' before using the bot.")
@@ -428,7 +418,7 @@ def connect(name: str | None = None) -> int:
     if agent_cls.name == "codex":
         print("  ✓ Codex needs no hook — turn boundaries come from its rollout log.")
     elif agent_cls.name == "claude-code":
-        _register_claude_hook()
+        _register_claude_hook(cfg, path)
         if not cfg.claude_session_id:
             print("  ⚠️  Couldn't pin this session's id yet (talk to the agent once, then it'll "
                   "route turn-end signals precisely). It still works meanwhile.")

@@ -52,6 +52,9 @@ def _cmd_run(args) -> int:
         except Exception:
             pass
     if cfg.mode == "attach":
+        if cfg.agent == "claude-code":
+            from .claude_hooks import register
+            register(cfg)
         from .attach import AttachBridge
         AttachBridge(cfg).run()
     else:
@@ -123,9 +126,12 @@ def _cmd_notify(args) -> int:
     return rc
 
 
-def _cmd_doctor(_args) -> int:
+def _cmd_doctor(args) -> int:
+    import os
     from .config import load, ConfigError
     from . import adapters
+    if getattr(args, 'config', None):
+        os.environ['AGENT2TELEGRAM_CONFIG'] = args.config
     try:
         cfg = load()
     except ConfigError as e:
@@ -141,6 +147,14 @@ def _cmd_doctor(_args) -> int:
     if not cfg.allowed_user_ids:
         print("⚠️  allowed_user_ids is empty — the bot will refuse everyone.")
         ok = False
+    if cfg.mode == 'attach' and cfg.agent == 'claude-code':
+        from .claude_hooks import check, repair_command
+        hooked, detail = check(cfg)
+        print(f"Claude Stop hook: {'✓' if hooked else '✗'} {detail}")
+        if not hooked:
+            print(f'Repair: {repair_command()}')
+            print('Then resume the same Claude session to load the hook.')
+            ok = False
     try:
         from .telegram import TelegramClient
         me = TelegramClient(cfg.token).get_me()
@@ -213,7 +227,8 @@ def _cmd_uninstall(args) -> int:
     print(f"  stopped {killed} running bridge(s)" if killed else "  no running bridge found")
 
     # 2) Unregister the Claude Code Stop hook, if the wizard added one.
-    settings = Path.home() / ".claude" / "settings.json"
+    from .claude_hooks import settings_path
+    settings = settings_path()
     try:
         data = json.loads(settings.read_text("utf-8"))
         stops = data.get("hooks", {}).get("Stop", [])
@@ -288,7 +303,10 @@ def _main(argv: list[str] | None = None) -> int:
     nt.add_argument("--file", action="append",
                     help="attach a file from an outbox folder (repeatable)")
     sub.add_parser("service", help="print a systemd/launchd service unit")
-    sub.add_parser("doctor", help="diagnose config and agent availability")
+    doctor = sub.add_parser("doctor", help="diagnose config and agent availability")
+    doctor.add_argument('--config', help='path to a specific bridge config')
+    hook = sub.add_parser('claude-hook', help='register the Claude Stop hook without starting a bridge')
+    hook.add_argument('--config', help='path to a specific bridge config')
     st = sub.add_parser("selftest", help="end-to-end attach test against a real agent (no bot)")
     st.add_argument("--agent", default="codex", choices=["codex", "claude-code"],
                     help="which agent to test (default: codex)")
@@ -320,6 +338,10 @@ def _main(argv: list[str] | None = None) -> int:
         return service.print_instructions()
     if args.command == "doctor":
         return _cmd_doctor(args)
+    if args.command == 'claude-hook':
+        from pathlib import Path
+        from .claude_hooks import register
+        return 1 if register(path=Path(args.config) if args.config else None) == 'error' else 0
     if args.command == "selftest":
         from . import selftest
         return selftest.run(args.agent, keep=args.keep)
