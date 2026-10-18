@@ -70,7 +70,7 @@ def _describe_error(err: BaseException) -> str:
 
 
 def voice_settings_for(model_id: str) -> dict:
-    """Steady, full-voice delivery. Petr (2026-09-05) heard a long narration drop into a whisper
+    """Steady, full-voice delivery. Long narrations can drop into a whisper
     halfway through: with default settings the voice drifts over long generations. High
     stability keeps it level; v3 only accepts 0.0 / 0.5 / 1.0 (Creative / Natural / Robust)."""
     if str(model_id or "").startswith("eleven_v3"):
@@ -123,8 +123,8 @@ def synthesize(text: str, *, api_key: str, voice_id: str, model_id: str = DEFAUL
 
 
 # ── Long narrations (2026-09-05) ─────────────────────────────────────────────────────────
-# Petr: "klidně pět minut, ať to má délku skoro jako podcast, když řídíme". One ElevenLabs
-# request takes a few thousand characters at most and long single requests are where the
+# Support extended, podcast-style narration. One ElevenLabs request takes a few thousand
+# characters at most and long single requests are where the
 # alpha v3 model gets flaky, so a long text is spoken in sentence-sized pieces and the
 # caller glues the audio together. Splitting is by SENTENCE, never mid-word.
 LONG_CHUNK_CHARS = 350   # ~20 s of speech per request: measured flat (±1.5 dB) where 700 already sagged 4–7 dB

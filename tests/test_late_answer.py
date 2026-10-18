@@ -1,6 +1,6 @@
 """A Telegram turn's answer must arrive even when it lands late or after a harness record.
 
-Live case, 2026-09-02 22:18–22:26 (Genius bridge, `run.log`):
+Reported case, 2026-09-02 22:18–22:26 (attach bridge, `run.log`):
   * 22:19 — the turn ended (Stop hook) before any text was written; the backstop picked the
     PREVIOUS turn's answer as "the final answer", the dedup ledger dropped it, and the log said
     the turn was answered. Nothing reached the user.

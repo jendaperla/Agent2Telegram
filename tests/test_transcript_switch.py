@@ -1,7 +1,7 @@
 """Adopting a transcript must never replay its history as the current answer (2026-09-04).
 
-Sol's bridge followed a sibling agent's rollout for ten minutes (both agents run from the same
-cwd), jumped back to Sol's own rollout when the owner wrote "jsi tam?", started at byte 0 and
+A bridge followed a sibling agent's rollout for ten minutes (both agents run from the same
+cwd), jumped back to its own rollout when the owner wrote "hello?", started at byte 0 and
 forwarded 22 old messages as the reply. Two guards below: the session's OWN rollout wins over
 anything cwd/mtime can suggest, and a freshly adopted transcript is read only from the current
 turn onwards.

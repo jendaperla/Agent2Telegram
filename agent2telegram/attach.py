@@ -144,8 +144,7 @@ VOICE_MODE_HINT = (
 #: Above this length a reply is sent as TEXT even in voice mode — reading a two-page analysis
 #: aloud is worse than scannable text (and a >~45 s voice note is unwieldy). The agent is asked
 #: to keep spoken replies short; this is the backstop when it doesn't.
-# Ceiling for reading aloud. 600 → 1200 (2026-08-01) → 6000 (2026-09-05, Petr: "klidně pět
-# minut, ať to má délku skoro jako podcast, když řídíme"). Roughly five minutes of Czech speech.
+# Ceiling for reading aloud: roughly five minutes of Czech speech.
 # Still a BACKSTOP: the hint asks the agent to stay short unless a long narration was requested.
 VOICE_MAX_CHARS = 6000
 
@@ -399,9 +398,8 @@ class AttachBridge:
 
         The cwd is not enough to tell sessions apart: every agent on a box tends to run from the
         same home directory, so when a *sibling* agent restarted, its rollout became the newest
-        one "for our cwd" and the bridge tailed the wrong session (2026-09-04: Sol's bridge
-        followed Longevity's rollout for ten minutes, then jumped back and replayed 22 old
-        messages as the answer to "jsi tam?")."""
+        one "for our cwd" and the bridge tailed the wrong session, then jumped back and
+        replayed old messages as the answer to a new request."""
         try:
             out = subprocess.run(
                 ["tmux", "list-panes", "-t", self.cfg.tmux_session, "-F", "#{pane_pid}"],
@@ -1675,8 +1673,7 @@ class AttachBridge:
                     lst.write(f"file '{part}'\n")
             # OGG/OPUS is what Telegram wants for a real voice bubble; other formats become a
             # plain audio attachment. The pieces are glued with the concat demuxer and 1.5 s of
-            # silence is padded at the end: Petr (2026-09-05) heard the last words of two notes
-            # clipped, and a silent tail costs nothing. No shell.
+            # silence is padded at the end to protect the last words from clipping. No shell.
             # 48 kHz mono is what Telegram voice notes use natively; 0.7 s of lead-in and 1.5 s
             # of tail silence protect the first and last words from client-side clipping; loudnorm
             # (EBU R128) keeps the level even across a long note (2026-09-05: whispering half).
