@@ -66,7 +66,7 @@ class OutgoingFilesTest(unittest.TestCase):
             self.assertEqual(reason, "ok")
             self.assertEqual(resolved, f.resolve())
 
-    def test_soubor_mimo_outbox_se_odmitne(self) -> None:
+    def test_file_outside_outbox_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "outbox"
             out.mkdir()
@@ -107,14 +107,14 @@ class OutgoingFilesTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "outbox"
             out.mkdir()
-            f = out / "prazdny.mp4"
+            f = out / "empty.mp4"
             f.touch()
             b = bind(FakeBridge(cfg_with_outbox(out)))
             resolved, reason = b._safe_outbox_path(str(f))
             self.assertIsNone(resolved)
             self.assertIn("empty", reason)
 
-    def test_metoda_podle_typu_souboru(self) -> None:
+    def test_method_matches_file_type(self) -> None:
         self.assertEqual(TelegramClient.kind_for("a.mp4"), ("sendVideo", "video"))
         self.assertEqual(TelegramClient.kind_for("a.MOV"), ("sendVideo", "video"))
         self.assertEqual(TelegramClient.kind_for("a.opus"), ("sendAudio", "audio"))

@@ -152,6 +152,7 @@ def _cmd_doctor(_args) -> int:
 
 
 def _cmd_uninstall(args) -> int:
+    import importlib.util
     import json
     import os
     import shutil
@@ -252,14 +253,15 @@ def _cmd_uninstall(args) -> int:
             return 1
 
     # 5) Remove the pip package too, if it was installed that way (no-op otherwise).
-    result = subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "agent2telegram"],
-                            capture_output=True)
-    if result.returncode:
-        result = subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y",
-                                 "--break-system-packages", "agent2telegram"], capture_output=True)
+    if importlib.util.find_spec('pip') is not None:
+        result = subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "agent2telegram"],
+                                capture_output=True, cwd=home)
         if result.returncode:
-            print('Default files removed, but pip cleanup failed. Check the package in this Python environment.')
-            return 1
+            result = subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y",
+                                     "--break-system-packages", "agent2telegram"], capture_output=True, cwd=home)
+            if result.returncode:
+                print('Default files removed, but pip cleanup failed. Check the package in this Python environment.')
+                return 1
     print("\n✓ Default installation removed. Custom source/state paths and supervisors are left for their owner.")
     return 0
 

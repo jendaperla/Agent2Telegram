@@ -221,6 +221,36 @@ class ReleaseSafetyTests(unittest.TestCase):
              redirect_stdout(io.StringIO()):
             self.assertNotEqual(_cmd_uninstall(Namespace(yes=True)), 0)
 
+    def test_uninstall_pip_runs_outside_deleted_source(self):
+        from argparse import Namespace
+        from agent2telegram.__main__ import _cmd_uninstall
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            source = home/'.agent2telegram-src'
+            source.mkdir()
+            def run(argv, **kwargs):
+                self.assertFalse(source.exists())
+                self.assertEqual(kwargs.get('cwd'), home)
+                return Mock(returncode=0, stdout='')
+            with patch('pathlib.Path.home', return_value=home), \
+                 patch('agent2telegram.config.DEFAULT_PATH', home/'config/config.json'), \
+                 patch.object(updater, '_running_bridges', return_value=[]), \
+                 patch('subprocess.run', side_effect=run), redirect_stdout(io.StringIO()):
+                self.assertEqual(_cmd_uninstall(Namespace(yes=True)), 0)
+
+    def test_uninstall_stdlib_only_install_does_not_require_pip(self):
+        from argparse import Namespace
+        from agent2telegram.__main__ import _cmd_uninstall
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch('pathlib.Path.home', return_value=Path(tmp)), \
+             patch('agent2telegram.config.DEFAULT_PATH', Path(tmp)/'config/config.json'), \
+             patch.object(updater, '_running_bridges', return_value=[]), \
+             patch('importlib.util.find_spec', return_value=None), \
+             patch('subprocess.run', return_value=Mock(returncode=1)) as run, \
+             redirect_stdout(io.StringIO()):
+            self.assertEqual(_cmd_uninstall(Namespace(yes=True)), 0)
+            run.assert_not_called()
+
     def test_service_exports_source_path_and_explicit_state_without_secrets(self):
         from agent2telegram import service
         import plistlib

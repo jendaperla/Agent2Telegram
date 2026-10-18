@@ -232,5 +232,5 @@ class KeyShape(unittest.TestCase):
         self.assertTrue(stt.looks_like_api_key("sk_" + "a" * 48))
         self.assertTrue(stt.looks_like_api_key("  sk_" + "a" * 48 + "  "))
 
-    def test_prazdny_klic_neprojde(self):
+    def test_empty_key_is_rejected(self):
         self.assertFalse(stt.looks_like_api_key(""))
