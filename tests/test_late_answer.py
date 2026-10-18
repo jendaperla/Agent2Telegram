@@ -8,7 +8,7 @@ Reported case, 2026-09-02 22:18–22:26 (attach bridge, `run.log`):
     compaction summary (a ``user`` record with ``isCompactSummary``) reset "turn from Telegram";
     the real answer written at 22:25 was then dropped with no log line at all.
 
-Each test names the mutation that makes it red (rodný list červenosti).
+Each test names the mutation that makes it red (regression reproduction).
 """
 import json
 import tempfile

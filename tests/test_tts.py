@@ -57,14 +57,14 @@ class _Opener:
 class SynthesizeTests(unittest.TestCase):
     def test_returns_audio_bytes(self):
         op = _Opener(b"\xff\xfb audio")
-        out = synthesize("ahoj", api_key="k", voice_id="V", opener=op)
+        out = synthesize("hello", api_key="k", voice_id="V", opener=op)
         self.assertEqual(out, b"\xff\xfb audio")
         self.assertEqual(op.calls, 1)
         self.assertEqual(op.req.headers.get("Xi-api-key"), "k")   # key in header only
 
     def test_no_key_raises_clean(self):
         with self.assertRaises(TTSError):
-            synthesize("ahoj", api_key="", voice_id="V", opener=_Opener())
+            synthesize("hello", api_key="", voice_id="V", opener=_Opener())
 
     def test_key_never_in_error_message(self):
         secret = "sk_supersecret_12345"
@@ -74,7 +74,7 @@ class SynthesizeTests(unittest.TestCase):
                 raise ConnectionError("network down")
 
         try:
-            synthesize("ahoj", api_key=secret, voice_id="V", opener=_Boom(),
+            synthesize("hello", api_key=secret, voice_id="V", opener=_Boom(),
                        retry_backoffs=(), sleeper=lambda *_: None)
             self.fail("expected TTSError")
         except TTSError as e:

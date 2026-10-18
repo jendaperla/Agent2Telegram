@@ -67,7 +67,7 @@ class DurableInboxTests(unittest.TestCase):
             first = inbox.reserve(update)
             self.assertEqual(inbox.reserve(dict(update)), first)
             with self.assertRaises(RecordConflictError):
-                inbox.reserve({"update_id": 7, "message": {"text": "jine"}})
+                inbox.reserve({"update_id": 7, "message": {"text": "different"}})
             self.assertEqual(len(inbox.pending()), 1)
 
     def test_fail_count_and_give_up_survive_restart(self):
@@ -258,7 +258,7 @@ class DurableOutboxTests(unittest.TestCase):
             self.assertEqual(first, second)
             self.assertEqual(len(DurableOutbox(root).pending()), 1)
             with self.assertRaises(RecordConflictError):
-                DurableOutbox(root).enqueue(["jina"], ["/tmp/x"], "uuid-1")
+                DurableOutbox(root).enqueue(["another"], ["/tmp/x"], "uuid-1")
 
     def test_fifo_order_survives_restart(self):
         with tempfile.TemporaryDirectory() as td:

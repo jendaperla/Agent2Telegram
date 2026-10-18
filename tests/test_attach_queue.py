@@ -475,14 +475,13 @@ class InboundLogLineTests(unittest.TestCase):
 
 
 class ReactionDedupTests(unittest.TestCase):
-    """Jedno ❤️ nesmí vyvolat šest odpovědí.
+    """One reaction must not trigger six replies.
 
-    2026-08-26 poslal Telegram tutéž reakci jako šest samostatných updatů během 13 sekund
-    (update_id 36303177-182). Agent na každý odpověděl jednou emoji, takže uživateli přišla
-    salva koček. Reakce je jednoznačně určená trojicí chat + zpráva + emoji.
+    Telegram can redeliver the same reaction as multiple independent updates.
+    A reaction is identified by the combination of chat, message, and emoji.
     """
 
-    def _postav(self):
+    def _build(self):
         b = _bridge()
         b._reaction_seen = {}
         b._injected = []
@@ -496,34 +495,34 @@ class ReactionDedupTests(unittest.TestCase):
             "user": {"id": 7}, "chat": {"id": chat}, "message_id": msg_id,
             "new_reaction": [{"type": "emoji", "emoji": emoji}]}}
 
-    def test_sestkrat_stejna_reakce_je_jedna_odpoved(self):
-        b = self._postav()
-        for uid in range(36303177, 36303183):
+    def test_six_identical_reactions_produce_one_reply(self):
+        b = self._build()
+        for uid in range(100, 106):
             b._handle(self._upd(uid))
-        self.assertEqual(len(b._injected), 1, f"agent dostal {len(b._injected)} pobídek místo jedné")
+        self.assertEqual(len(b._injected), 1, f"agent received {len(b._injected)} prompts instead of one")
 
-    def test_jina_zprava_projde(self):
-        b = self._postav()
+    def test_reaction_to_another_message_passes(self):
+        b = self._build()
         b._handle(self._upd(1, msg_id=100))
         b._handle(self._upd(2, msg_id=101))
-        self.assertEqual(len(b._injected), 2, "reakce na jinou zprávu se nesmí zahodit")
+        self.assertEqual(len(b._injected), 2, "a reaction to another message must not be dropped")
 
-    def test_jine_emoji_projde(self):
-        b = self._postav()
+    def test_another_emoji_passes(self):
+        b = self._build()
         b._handle(self._upd(1, emoji="❤️"))
         b._handle(self._upd(2, emoji="👍"))
-        self.assertEqual(len(b._injected), 2, "jiné emoji je jiná zpětná vazba")
+        self.assertEqual(len(b._injected), 2, "another emoji is different feedback")
 
-    def test_po_uplynuti_okna_projde_znovu(self):
-        b = self._postav()
+    def test_reaction_passes_after_dedup_window(self):
+        b = self._build()
         b._handle(self._upd(1))
-        klic = list(b._reaction_seen)[0]
-        b._reaction_seen[klic] -= attach_mod.REACTION_DEDUP_S + 1
+        key = list(b._reaction_seen)[0]
+        b._reaction_seen[key] -= attach_mod.REACTION_DEDUP_S + 1
         b._handle(self._upd(2))
-        self.assertEqual(len(b._injected), 2, "po vypršení okna má reakce projít")
+        self.assertEqual(len(b._injected), 2, "a reaction must pass after the window expires")
 
-    def test_pamet_neroste_donekonecna(self):
-        b = self._postav()
+    def test_memory_does_not_grow_unbounded(self):
+        b = self._build()
         for i in range(700):
             b._handle(self._upd(i, msg_id=i))
         self.assertLessEqual(len(b._reaction_seen), 512)

@@ -518,15 +518,15 @@ def set_elevenlabs(config: str | None = None) -> int:
     return 0
 
 
-def _hermes_set(exe: str, klic: str, hodnota: str) -> bool:
+def _hermes_set(exe: str, key: str, value: str) -> bool:
     """`hermes config set <key> <value>`, tolerating both CLI generations.
 
     Older builds reject `--force` outright ("unrecognized arguments"), newer ones want it to
     overwrite an existing value. Trying the documented form first and falling back keeps this
     working on whatever the user installed."""
     import subprocess
-    for argv in ([exe, "config", "set", klic, hodnota],
-                 [exe, "config", "set", "--force", klic, hodnota]):
+    for argv in ([exe, "config", "set", key, value],
+                 [exe, "config", "set", "--force", key, value]):
         try:
             r = subprocess.run(argv, capture_output=True, text=True, timeout=60)
         except Exception:

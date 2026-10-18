@@ -17,7 +17,7 @@ class LanguageIsSent(unittest.TestCase):
         class FakeResp:
             def __enter__(self_inner): return self_inner
             def __exit__(self_inner, *a): return False
-            def read(self_inner): return b'{"text": "ahoj"}'
+            def read(self_inner): return b'{"text": "hello"}'
 
         class FakeOpener:
             def open(self_inner, req, timeout=None):
@@ -29,7 +29,7 @@ class LanguageIsSent(unittest.TestCase):
 
     def test_language_appears_in_the_request(self):
         text, body = self._capture(language="cs")
-        self.assertEqual(text, "ahoj")
+        self.assertEqual(text, "hello")
         self.assertIn("language_code", body)
         self.assertIn("cs", body)
 

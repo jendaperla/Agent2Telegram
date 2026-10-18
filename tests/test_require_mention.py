@@ -10,7 +10,7 @@ class MentionTests(unittest.TestCase):
     def setUp(self):
         self.cfg = Config(agent="codex", token="fixture:only", allowed_user_ids=[11],
                           bot_username="example_bot", require_mention=True)
-        self.msg = {"from": {"id": 11}, "chat": {"id": -99, "type": "supergroup"}, "text": "Ahoj"}
+        self.msg = {"from": {"id": 11}, "chat": {"id": -99, "type": "supergroup"}, "text": "Hello"}
 
     def test_default_and_private(self):
         self.assertFalse(Config(agent="codex", token="fixture:only").require_mention)
@@ -18,7 +18,7 @@ class MentionTests(unittest.TestCase):
 
     def test_group_mentions(self):
         self.assertFalse(accepts_message(self.cfg, self.msg))
-        for text in ("@example_bot Ahoj", "Ahoj @EXAMPLE_BOT", "/start@example_bot"):
+        for text in ("@example_bot Hello", "Hello @EXAMPLE_BOT", "/start@example_bot"):
             self.assertTrue(accepts_message(self.cfg, {**self.msg, "text": text}))
         for text in ("@example_bot_fake", "@@example_bot", "@otherbot"):
             self.assertFalse(accepts_message(self.cfg, {**self.msg, "text": text}))

@@ -17,7 +17,7 @@ class ReplyToOriginTests(unittest.TestCase):
 
     def msg(self, user, chat, kind="supergroup"):
         return {"message": {"from": {"id": user}, "chat": {"id": chat, "type": kind},
-                            "message_id": 5, "text": "Ahoj"}}
+                            "message_id": 5, "text": "Hello"}}
 
     def test_default_is_off_and_validated(self):
         self.assertFalse(Config(agent="codex", token="fixture:only").reply_to_origin_chat)
@@ -53,17 +53,17 @@ if __name__ == "__main__":
 class GroupMarkerTests(unittest.TestCase):
     def test_marker_routes_to_first_allowed_group_and_is_stripped(self):
         cfg = Config(agent="claude-code", token="fixture:only", allowed_user_ids=[11],
-                     reply_to_origin_chat=True, allowed_group_ids=[-500], group_marker="[skupina]")
+                     reply_to_origin_chat=True, allowed_group_ids=[-500], group_marker="[team]")
         b = object.__new__(AttachBridge)
         b.cfg, b._owner_chat = cfg, 11
-        self.assertEqual(b._route_group_marker("[skupina] Ahoj všem"), ("Ahoj všem", -500))
+        self.assertEqual(b._route_group_marker("[team] Hello everyone"), ("Hello everyone", -500))
         # Only this reply goes to the group; the turn's recipient stays the owner's DM.
         self.assertEqual(b._owner_chat, 11)
 
     def test_no_marker_or_no_group_keeps_chat(self):
-        cfg = Config(agent="claude-code", token="fixture:only", allowed_user_ids=[11], group_marker="[skupina]")
+        cfg = Config(agent="claude-code", token="fixture:only", allowed_user_ids=[11], group_marker="[team]")
         b = object.__new__(AttachBridge)
         b.cfg, b._owner_chat = cfg, 11
-        self.assertEqual(b._route_group_marker("[skupina] x"), ("[skupina] x", 11))
-        self.assertEqual(b._route_group_marker("Ahoj"), ("Ahoj", 11))
+        self.assertEqual(b._route_group_marker("[team] x"), ("[team] x", 11))
+        self.assertEqual(b._route_group_marker("Hello"), ("Hello", 11))
         self.assertEqual(b._owner_chat, 11)

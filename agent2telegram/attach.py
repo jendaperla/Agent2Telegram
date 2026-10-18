@@ -86,9 +86,8 @@ REPLY_QUOTE_CHARS = 300
 CHAT_SWITCH_MAX_WAIT = 1800.0
 CHAT_SWITCH_POLL = 0.5
 
-#: Jak dlouho po první reakci považovat tutéž reakci na tutéž zprávu za duplicitu.
-#: Telegram jich 2026-08-26 poslal šest během 13 sekund. Okno je krátké, aby se nezahodila
-#: reakce, kterou uživatel opravdu sundá a znovu dá.
+#: Deduplicate repeated deliveries of the same reaction on the same message.
+#: Keep the window short so a user can remove and intentionally add a reaction again.
 REACTION_DEDUP_S = 60.0
 #: How often we re-assert the "typing…" chat action (Telegram shows it for ~5s). Kept well
 #: under that window so a turn never shows a gap, even right after a sent message clears it.
@@ -260,7 +259,7 @@ class AttachBridge:
             raise ValueError("attach mode requires 'tmux_session' in config")
         self.cfg = cfg
         self.tg = client or TelegramClient(cfg.token)
-        self._reaction_seen: dict = {}   # (chat, msg, emoji) -> čas první reakce
+        self._reaction_seen: dict = {}   # (chat, msg, emoji) -> first reaction timestamp
         self._allowed = set(cfg.allowed_user_ids)
         self._marker = cfg.progress_marker
         self._origin = cfg.origin_prefix
@@ -1276,8 +1275,8 @@ class AttachBridge:
                 # a second opinion. This is identity matching, not guessing from content.
                 key = (mr.get("chat", {}).get("id"), mr.get("message_id"), emojis)
                 now = time.time()
-                # Most kdysi stavěl instance i bez __init__ (testy, starší kód), takže na
-                # existenci atributu se nedá spolehnout – založit ho líně.
+                # Legacy callers and tests can construct instances without __init__.
+                # Initialize the reaction cache lazily for those callers.
                 if getattr(self, "_reaction_seen", None) is None:
                     self._reaction_seen = {}
                 seen = self._reaction_seen.get(key)
@@ -1286,7 +1285,7 @@ class AttachBridge:
                              emojis, mr.get("message_id"), now - seen)
                     return True
                 self._reaction_seen[key] = now
-                if len(self._reaction_seen) > 512:      # drobná pojistka proti růstu
+                if len(self._reaction_seen) > 512:      # bound cache growth
                     for k in sorted(self._reaction_seen, key=self._reaction_seen.get)[:256]:
                         self._reaction_seen.pop(k, None)
 
@@ -1309,7 +1308,7 @@ class AttachBridge:
                     f"— quick feedback. Always answer, but with ONE very short line "
                     f"(a few words or an emoji), nothing more.")
                 if self.cfg.inbound_sender_label:
-                    text = f"{sender_label({'from': mr.get('user'), 'chat': mr.get('chat')})} {text}"
+                    text = f"{sender_label({'from': mr.get('user'), 'chat': mr.get('chat')}, self.cfg.language)} {text}"
                 return self._inject(text)
             return True
 
@@ -1379,7 +1378,7 @@ class AttachBridge:
                 # mode — the model phrases speakable text far better than any post-processing.
                 text = f"{VOICE_MODE_HINT}\n{text}"
             if self.cfg.inbound_sender_label:
-                text = f"{sender_label(msg)} {text}"
+                text = f"{sender_label(msg, self.cfg.language)} {text}"
             text = self._limit_inbound_prompt(text, chat_id)
             if not text:
                 return True

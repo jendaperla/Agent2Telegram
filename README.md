@@ -240,7 +240,9 @@ Other group messages are silently ignored, including receipt acknowledgments. Pr
 are unchanged. The default is `false`; the authorized-user allowlist is always enforced.
 
 In attach mode, optional `"inbound_sender_label": true` adds sender/chat context immediately
-after `origin_prefix`: `[Od: Alex · DM]` or `[Od: Alex · skupina "Team"]`.
+after `origin_prefix`: `[From: Alex · DM]` or `[From: Alex · group "Team"]`.
+The default language is English. With explicit `language: "cs"`, the original Czech
+`[Od: ...]` prefix is preserved, including reactions, voice notes, and attachments.
 Names come from the current Telegram sender, including voice messages, attachments and reactions;
 reply quotes do not replace the sender. Display names (64 characters) and group titles (80)
 are sanitized to one line without brackets, quotes or control characters.

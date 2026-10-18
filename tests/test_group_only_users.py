@@ -16,7 +16,7 @@ class GroupOnlyUserTests(unittest.TestCase):
 
     def msg(self, user, chat, kind):
         return {"message": {"from": {"id": user}, "chat": {"id": chat, "type": kind},
-                            "message_id": 5, "text": "Ahoj"}}
+                            "message_id": 5, "text": "Hello"}}
 
     def run_msg(self, b, *a):
         try: b._handle(self.msg(*a))

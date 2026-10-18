@@ -41,9 +41,9 @@ class NoticeTests(unittest.TestCase):
         with patch('agent2telegram.notices.time.time',return_value=131):
             restart_notice(b,-99)  # Same process must stay quiet even after cooldown.
             b.tg.send_message.assert_called_once()
-            restarted = self.bridge(restart_notice=True,restart_notice_text='🔄 Bot je zpět.')
+            restarted = self.bridge(restart_notice=True,restart_notice_text='🔄 Bot is back.')
             restart_notice(restarted,-99)
-            restarted.tg.send_message.assert_called_once_with(-99,'🔄 Bot je zpět.')
+            restarted.tg.send_message.assert_called_once_with(-99,'🔄 Bot is back.')
 
     def test_uncertain_delivery_is_not_retried_by_restart(self):
         with patch('agent2telegram.notices.time.time',return_value=100):
@@ -92,7 +92,7 @@ class NoticeTests(unittest.TestCase):
             b.tg.send_message.assert_called_once()
 
     def test_configuration_roundtrip_and_validation(self):
-        cfg=self.bridge(restart_notice=True,language='cs',restart_notice_text='🔄 Zpět.').cfg
+        cfg=self.bridge(restart_notice=True,language='cs',restart_notice_text='🔄 Back.').cfg
         path=self.root/'config.json'; save(cfg,path); loaded=load(path)
         self.assertTrue(loaded.restart_notice); self.assertEqual(loaded.language,'cs')
         for fields in ({'restart_notice':'true'},{'language':'xx'},{'restart_notice_text':'x\ny'},

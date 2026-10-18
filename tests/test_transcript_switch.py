@@ -79,7 +79,7 @@ class SwitchingTranscript(unittest.TestCase):
             p = Path(d) / "rollout-x.jsonl"
             now = time.time()
             lines = [_user("[TG] old", now - 900), _assistant("old answer", now - 890),
-                     _user("[TG] jsi tam?", now - 1), _assistant("Ahoj, jsem tady.", now)]
+                     _user("[TG] are you there?", now - 1), _assistant("Hello, I'm here.", now)]
             p.write_text("\n".join(lines) + "\n", "utf-8")
             b._turn_active.set()
             b._turn_started_wall = now - 1.5
@@ -91,7 +91,7 @@ class SwitchingTranscript(unittest.TestCase):
                 f.seek(b._tpos)
                 rest = f.read().decode("utf-8")
             self.assertNotIn("old answer", rest)
-            self.assertIn("Ahoj, jsem tady.", rest)
+            self.assertIn("Hello, I'm here.", rest)
 
     def test_mid_turn_with_nothing_new_yet_starts_at_the_end(self):
         with tempfile.TemporaryDirectory() as d:

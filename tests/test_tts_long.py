@@ -11,7 +11,7 @@ from agent2telegram import tts
 
 class SplitForTtsTests(unittest.TestCase):
     def test_split_respects_limit_and_sentence_boundaries(self):
-        text = "První věta je krátká. Druhá věta je o něco delší než ta první! Třetí? Čtvrtá věta končí tečkou."
+        text = "The first sentence is short. This second sentence is a little longer! Third? The last one ends with a full stop."
         parts = tts.split_for_tts(text, max_chars=45)
         self.assertGreater(len(parts), 1)
         for part in parts:
@@ -20,7 +20,7 @@ class SplitForTtsTests(unittest.TestCase):
         self.assertEqual(" ".join(parts), text)         # nothing lost, nothing reordered
 
     def test_single_overlong_sentence_is_cut_at_a_space(self):
-        text = "slovo " * 40
+        text = "word " * 40
         parts = tts.split_for_tts(text.strip(), max_chars=50)
         self.assertTrue(all(len(p) <= 50 for p in parts))
         self.assertTrue(all(" " not in (p[-1], p[0]) for p in parts))
@@ -40,7 +40,7 @@ class SynthesizeLongTests(unittest.TestCase):
             calls.append(piece)
             return piece.encode("utf-8")
 
-        text = "Věta jedna. Věta dva. Věta tři."
+        text = "One sentence. Two sentences. Three sentences."
         with mock.patch.object(tts, "synthesize", side_effect=fake_synthesize):
             segments = tts.synthesize_long(text, api_key="k", voice_id="v", max_chars=12)
         self.assertEqual(calls, tts.split_for_tts(text, max_chars=12))
@@ -49,13 +49,13 @@ class SynthesizeLongTests(unittest.TestCase):
 
     def test_short_text_is_a_single_segment(self):
         with mock.patch.object(tts, "synthesize", return_value=b"mp3") as syn:
-            self.assertEqual(tts.synthesize_long("Krátká věta.", api_key="k", voice_id="v"), [b"mp3"])
+            self.assertEqual(tts.synthesize_long("Short sentence.", api_key="k", voice_id="v"), [b"mp3"])
         self.assertEqual(syn.call_count, 1)
 
     def test_v3_speaks_a_normal_reply_in_one_request(self):
         # v3 gives every request a different "take" (timbre/pace), so splitting a ~1 500-char
         # reply into 350-char pieces sounded like alternating voices (2026-10-08).
-        text = "Tohle je běžná věta odpovědi. " * 50          # ~1 500 chars
+        text = "This is a normal reply sentence. " * 50          # ~1 500 chars
         with mock.patch.object(tts, "synthesize", return_value=b"mp3") as syn:
             tts.synthesize_long(text, api_key="k", voice_id="v", model_id="eleven_v3")
         self.assertEqual(syn.call_count, 1)
@@ -73,7 +73,7 @@ class SynthesizeLongTests(unittest.TestCase):
                 seen.append(__import__("json").loads(req.data)); return Resp()
 
         for _ in range(2):
-            tts.synthesize("Ahoj.", api_key="k", voice_id="v", model_id="eleven_v3", opener=Opener())
+            tts.synthesize("Hello.", api_key="k", voice_id="v", model_id="eleven_v3", opener=Opener())
         self.assertEqual(seen[0].get("seed"), seen[1].get("seed"))
         self.assertIsNotNone(seen[0].get("seed"))
 

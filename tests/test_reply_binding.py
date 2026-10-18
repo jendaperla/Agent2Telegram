@@ -20,7 +20,7 @@ OWNER, OTHER, GROUP = 11, 22, -500
 
 def make_bridge(tmp):
     cfg = Config(agent="claude-code", token="fixture:only", allowed_user_ids=[OWNER, OTHER],
-                 reply_to_origin_chat=True, allowed_group_ids=[GROUP], group_marker="[skupina]")
+                 reply_to_origin_chat=True, allowed_group_ids=[GROUP], group_marker="[team]")
     b = object.__new__(AttachBridge)
     b.cfg, b._allowed, b.tg = cfg, {OWNER, OTHER}, Mock()
     b._owner_chat = OWNER
@@ -39,7 +39,7 @@ def make_bridge(tmp):
 
 def msg(user, chat, kind):
     return {"message": {"from": {"id": user}, "chat": {"id": chat, "type": kind},
-                        "message_id": 5, "text": "Ahoj"}}
+                        "message_id": 5, "text": "Hello"}}
 
 
 class ReplyBindingTests(unittest.TestCase):
@@ -55,7 +55,7 @@ class ReplyBindingTests(unittest.TestCase):
 
     def test_queued_private_reply_is_not_flushed_into_a_later_group(self):
         self.b.tg.send_message.side_effect = OSError("network down")
-        self.b._send_final("soukromá odpověď")            # queued for the owner's DM
+        self.b._send_final("private reply")            # queued for the owner's DM
         self.b._flush_pending()
         self.b._owner_chat = GROUP                        # a group message switched the chat
         self.b.tg.send_message.reset_mock(side_effect=True)
@@ -86,15 +86,15 @@ class ReplyBindingTests(unittest.TestCase):
 
     def test_marker_ignored_in_a_group_turn(self):
         self.b._owner_chat = GROUP
-        self.assertEqual(self.b._route_group_marker("[skupina] x"), ("x", GROUP))
+        self.assertEqual(self.b._route_group_marker("[team] x"), ("x", GROUP))
 
     def test_marker_ignored_in_another_users_dm(self):
         self.b._owner_chat = OTHER
-        self.assertEqual(self.b._route_group_marker("[skupina] x"), ("x", OTHER))
+        self.assertEqual(self.b._route_group_marker("[team] x"), ("x", OTHER))
 
     def test_marker_from_owner_dm_routes_one_reply_only(self):
-        self.b._send_final("[skupina] do skupiny")
-        self.b._send_final("zpátky soukromě")
+        self.b._send_final("[team] to the group")
+        self.b._send_final("back in private")
         self.b._flush_pending()
         self.assertEqual(self.sent_to(), [GROUP, OWNER])
         self.assertEqual(self.b._owner_chat, OWNER)
@@ -118,8 +118,8 @@ class ReplyBindingTests(unittest.TestCase):
         self.assertEqual(self.b._owner_chat, GROUP)
 
     def test_legacy_record_without_chat_goes_to_owner_dm_not_current_chat(self):
-        self.b._outbox.enqueue(["stará odpověď"], [], None)        # pre-binding record
-        self.b._pending_send.append({"text": "stará legacy", "key": None})
+        self.b._outbox.enqueue(["old reply"], [], None)        # pre-binding record
+        self.b._pending_send.append({"text": "old legacy", "key": None})
         self.b._owner_chat = GROUP
         self.b._persist_queue = Mock()
         self.b._flush_pending()

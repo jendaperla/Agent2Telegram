@@ -248,8 +248,8 @@ class LongMessagePasteTests(unittest.TestCase):
         return [c.args for c in mocked.call_args_list], loaded
 
     def test_long_text_goes_in_as_one_bracketed_paste_with_prefix_intact(self):
-        body = "Věta s diakritikou, čárkami a tečkami. " * 40          # ≈ 1.7 KB, like the real case
-        calls, loaded = self._run(body + "\nposlední řádek")
+        body = "Text with Unicode λ, commas and full stops. " * 40          # ≈ 1.7 KB, like the real case
+        calls, loaded = self._run(body + "\nfinal line")
         names = [c[0] for c in calls]
         self.assertEqual(names, ["send-keys", "load-buffer", "paste-buffer", "send-keys"])
         self.assertEqual(calls[0][1:], ("-t", "a2t-test", "C-u"))
@@ -257,18 +257,18 @@ class LongMessagePasteTests(unittest.TestCase):
         self.assertIn("-p", calls[2])                                     # bracketed paste
         self.assertIn("-d", calls[2])                                     # buffer deleted after use
         self.assertEqual(calls[1][2], calls[2][calls[2].index("-b") + 1])  # same buffer name
-        self.assertTrue(loaded["content"].startswith("[TG] Věta s diakritikou"))
-        self.assertEqual(loaded["content"], "[TG] " + body + " poslední řádek")   # whole text, one line
+        self.assertTrue(loaded["content"].startswith("[TG] Text with Unicode λ"))
+        self.assertEqual(loaded["content"], "[TG] " + body + " final line")   # whole text, one line
         self.assertFalse(os.path.exists(loaded["path"]))                   # temp file cleaned up
 
     def test_short_text_keeps_the_literal_send_keys_path(self):
-        calls, loaded = self._run("✅ krátká zpráva")
+        calls, loaded = self._run("✅ short message")
         names = [c[0] for c in calls]
         self.assertEqual(names, ["send-keys", "send-keys", "send-keys"])
-        self.assertEqual(calls[1][1:], ("-t", "a2t-test", "-l", "--", "[TG] ✅ krátká zpráva"))
+        self.assertEqual(calls[1][1:], ("-t", "a2t-test", "-l", "--", "[TG] ✅ short message"))
         self.assertEqual(loaded, {})
 
     def test_threshold_is_measured_in_bytes_not_characters(self):
-        text = "ž" * (PASTE_MIN_BYTES // 2 + 10)      # few characters, but > PASTE_MIN_BYTES bytes
+        text = "λ" * (PASTE_MIN_BYTES // 2 + 10)      # few characters, but > PASTE_MIN_BYTES bytes
         calls, _ = self._run(text)
         self.assertIn("paste-buffer", [c[0] for c in calls])

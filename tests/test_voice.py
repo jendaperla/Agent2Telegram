@@ -111,9 +111,9 @@ class DeliveryDecisionTests(unittest.TestCase):
             b = _voice_bridge(td, on=False)
             called = []
             b._try_send_voice = lambda t: called.append(t) or True
-            b._send_final("Ahoj.", key="k4")
+            b._send_final("Hello.", key="k4")
             self.assertEqual(called, [])
-            self.assertEqual(b.tg.sent, ["Ahoj."])
+            self.assertEqual(b.tg.sent, ["Hello."])
 
 
 class TrySendVoiceTests(unittest.TestCase):
@@ -124,7 +124,7 @@ class TrySendVoiceTests(unittest.TestCase):
             orig = attach_mod.shutil.which
             attach_mod.shutil.which = lambda name: None      # pretend ffmpeg absent
             try:
-                self.assertFalse(b._try_send_voice("ahoj"))  # no crash, just False
+                self.assertFalse(b._try_send_voice("hello"))  # no crash, just False
             finally:
                 attach_mod.shutil.which = orig
 
