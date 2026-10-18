@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import getpass
 import json
+import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -88,21 +90,31 @@ def _yes(prompt: str, default_yes: bool = False) -> bool:
 
 
 # ---------------------------------------------------------------- step 1: provider
+def _find_binary(binary):
+    found = shutil.which(binary)
+    if found:
+        return os.path.abspath(found)
+    for directory in (Path.home()/'.local/bin', Path.home()/'.npm-global/bin', Path('/opt/homebrew/bin')):
+        candidate = directory/binary
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
 def _choose_provider() -> type:
     agents = [a for a in adapters.available() if a.name in ATTACH_SUPPORTED]
     print("\n── Step 1/3 · Which agent do you want to connect? ──\n")
     for i, a in enumerate(agents, 1):
-        found = a.detect()
+        found = _find_binary(a.binary)
         mark = "✓ installed" if found else "· not found on PATH"
         print(f"  {i}) {a.label:<14} {mark}")
     print()
-    # Default to the first *installed* agent.
-    default = next((str(i) for i, a in enumerate(agents, 1) if a.detect()), "1")
     while True:
-        choice = _ask("Pick a number", default)
+        choice = _ask("Pick a number (required)")
         if choice.isdigit() and 1 <= int(choice) <= len(agents):
             a = agents[int(choice) - 1]
-            if not a.detect() and not _yes(f"'{a.binary}' isn't on PATH. Use it anyway?"):
+            if not _find_binary(a.binary):
+                print('That CLI is unavailable; check PATH or open a new terminal after installing it.')
                 continue
             return a
         print("Please enter a valid number.")
@@ -127,7 +139,13 @@ def _list_sessions() -> list[str]:
 def _create_session(name: str, agent_cls) -> bool:
     """Create a detached tmux session and launch the agent's interactive CLI inside it, with the
     flag that lets the bridge drive it unattended (no per-command approval prompt)."""
-    launch = " ".join(agent_cls.tui_launch())
+    executable = _find_binary(agent_cls.binary)
+    if not executable:
+        print('Agent CLI is unavailable; no session created.')
+        return False
+    launch = shlex.join([executable, *agent_cls.tui_launch()[1:]])
+    if not _yes(f"Create {agent_cls.label} session '{name}' with {executable}?", default_yes=False):
+        return False
     try:
         subprocess.run(["tmux", "new-session", "-d", "-s", name], check=True, timeout=10)
         if launch:
@@ -212,6 +230,32 @@ def _register_claude_hook(cfg=None, path=None) -> None:
 
 
 # ---------------------------------------------------------------- run
+def _start_bridge(path, state):
+    """One startup path for both wizards; register only a surviving process."""
+    from .monitoring import register_bridge
+    state.mkdir(parents=True, exist_ok=True)
+    log = state/'run.log'
+    env = dict(os.environ)
+    # Preserve clone installs even when the supervisor starts in another cwd.
+    source = str(Path(__file__).resolve().parent.parent)
+    env['PYTHONPATH'] = os.pathsep.join(filter(None, (source, env.get('PYTHONPATH'))))
+    env['AGENT2TELEGRAM_CONFIG'] = str(path.absolute())
+    try:
+        with log.open('a') as output:
+            child = subprocess.Popen([sys.executable, '-m', 'agent2telegram', 'run', '--config', str(path.absolute())],
+                env=env, stdout=output, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+        time.sleep(0.5)
+        if child.poll() is not None:
+            print(f'  Bridge exited during startup; check {log}. Monitoring registration skipped.')
+            return False
+    except OSError:
+        print(f'  Bridge startup failed; check {log}.')
+        return False
+    print(f'  ✓ bridge process started – logs at {log}')
+    register_bridge(path, state, env)
+    return True
+
+
 def run() -> int:
     print("=== Agent2Telegram setup ===")
     existing = config_path()
@@ -254,12 +298,8 @@ def run() -> int:
     # Just start it — no prompt. Asking "start now? (y/N)" only confuses people (esp. anyone
     # used to a Windows installer that simply finishes). The bridge belongs running.
     print("\nAll set! Starting the bridge in the background…")
-    log = state / "run.log"
-    state.mkdir(parents=True, exist_ok=True)
-    subprocess.Popen([sys.executable, "-m", "agent2telegram", "run"],
-                     stdout=open(log, "a"), stderr=subprocess.STDOUT,
-                     stdin=subprocess.DEVNULL, start_new_session=True)
-    print(f"  ✓ running — logs at {log}")
+    if not _start_bridge(path, state):
+        return 1
     print(f"  Message @{me.get('username')} on Telegram to test it.")
     print("  (Stop it anytime with:  python3 -m agent2telegram uninstall)")
     return 0
@@ -426,12 +466,8 @@ def connect(name: str | None = None) -> int:
     if not cfg.allowed_user_ids:
         print("⚠️  No authorized user — add your id to 'allowed_user_ids' before using the bot.")
     print(f"\nAll set! Starting the bridge for '{session}' in the background…")
-    state.mkdir(parents=True, exist_ok=True)
-    log = state / "run.log"
-    subprocess.Popen([sys.executable, "-m", "agent2telegram", "run", "--config", str(path)],
-                     stdout=open(log, "a"), stderr=subprocess.STDOUT,
-                     stdin=subprocess.DEVNULL, start_new_session=True)
-    print(f"  ✓ running — logs at {log}")
+    if not _start_bridge(path, state):
+        return 1
     print(f"  Message @{me.get('username')} on Telegram to test it.")
     print("  Keep it alive across reboots with your process supervisor "
           "(systemd, launchd — see `agent2telegram service`).")

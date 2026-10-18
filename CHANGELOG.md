@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.2 – 2026-10-19
+
+- Setup and connect optionally register each started bridge with Agents Monitoring
+  0.3.2+ through its public CLI. Config, interpreter, import path and state are
+  preserved; repeated registration updates the same entry and never copies tokens.
+  Missing monitoring is informational; registration failures leave the bridge running
+  and print a warning. A process that exits during startup is not registered.
+- Keep provider menu numbers stable, require an explicit choice, find common user-bin
+  installations, and confirm the absolute CLI before creating a new tmux session.
+- Refresh checked-hash bytecode during installation so same-second upgrades cannot
+  import stale code even when optional pip installation is skipped.
+
 ## 1.2.1 – 2026-10-18
 
 - Claude attach startup and setup share atomic, idempotent Stop-hook registration, honour

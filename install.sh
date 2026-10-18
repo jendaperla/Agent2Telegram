@@ -180,6 +180,17 @@ fi
 #    if pip is there we install the package too (so hooks can `python3 -m agent2telegram…`), but
 #    EITHER WAY we drop our own launcher into a directory on PATH so the command works right after
 #    install — no PYTHONPATH to remember, and (when a PATH dir is writable) no new shell needed.
+# Same-sized source changes within one timestamp second must invalidate old pyc,
+# including archive/git upgrades where optional pip installation is disabled.
+"$PY" - "$SRC" <<'PYCACHE' || err "Could not refresh bytecode; installation preserved."
+import compileall
+import pathlib
+import py_compile
+import sys
+package = pathlib.Path(sys.argv[1]) / "agent2telegram"
+sys.exit(0 if compileall.compile_dir(str(package), quiet=1, force=True,
+    invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH) else 1)
+PYCACHE
 if [ "$NO_PIP" -eq 0 ] && { "$PY" -m pip --version >/dev/null 2>&1 || "$PY" -m ensurepip --upgrade >/dev/null 2>&1; }; then
   say "Installing the package"
   "$PY" -m pip install --user --upgrade "$SRC" >/dev/null 2>&1 \

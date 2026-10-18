@@ -31,6 +31,22 @@ key (see *Voice messages* below).
   `pip install` for it to work, which means far fewer “it doesn’t run on my machine” moments.
 - **Works behind NAT** — long polling, so no port‑forwarding or domain needed.
 
+### Optional monitoring
+
+If [Agents Monitoring](https://github.com/petrludwig-collab/AgentsMonitoring)
+0.3.2+ is installed, `setup` and `connect` automatically register each bridge after
+its process starts. Each config has an independent daemon/health row and restart
+command; repeated registration updates the same entry. The registration preserves
+the Python interpreter, `PYTHONPATH` and state directory without copying bot tokens
+or changing Agents Monitoring's config directly. Existing stopped/enabled settings
+in the monitor are preserved. Its keepalive must be enabled for automatic recovery.
+
+Without the monitor, setup prints one informational sentence and continues normally.
+An old/unreachable monitor produces a warning; upgrade it and run `agentsmon add`
+to register an existing bridge. The bridge itself keeps running. Newly created
+sessions require an explicit provider choice and confirmation; missing CLIs never
+silently select another provider.
+
 ---
 
 ## Quick start
