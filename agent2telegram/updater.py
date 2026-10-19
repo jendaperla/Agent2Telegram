@@ -325,5 +325,11 @@ def run(*, no_restart: bool = False) -> int:
             return 1
         print(f"✓ Updated and restarted {n} bridge(s) on the new code.")
     else:
-        print("✓ Updated. No running bridge found — start one with:  agent2telegram run")
+        from .config import load, ConfigError
+        try:
+            load().validate()
+            command = 'agent2telegram run'
+        except (ConfigError, OSError, TypeError, ValueError):
+            command = 'agent2telegram setup'
+        print(f"✓ Updated. No running bridge found – next step:  {command}")
     return 0

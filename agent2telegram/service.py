@@ -4,7 +4,7 @@ Supports systemd (Linux) and launchd (macOS). The unit file is printed to **stdo
 (so it can be redirected to a file) while the install hints go to **stderr** — the classic
 Unix split that lets you do:
 
-    python -m agent2telegram service > ~/.config/systemd/user/agent2telegram.service
+    agent2telegram service > ~/.config/systemd/user/agent2telegram.service
 
 We never write to system paths ourselves: no sudo, and the user reviews what will run.
 """
@@ -85,18 +85,18 @@ def print_instructions() -> int:
         target = Path.home() / "Library/LaunchAgents/com.agent2telegram.bridge.plist"
         print(launchd_plist())                       # stdout: the unit
         hint("# launchd plist printed above. Install with:")
-        hint(f"#   {_python()} -m agent2telegram service > {target}")
+        hint(f"#   agent2telegram service > {target}")
         hint(f"#   launchctl load {target}")
     elif shutil.which("systemctl"):
         target = Path.home() / ".config/systemd/user/agent2telegram.service"
         print(systemd_unit())
         hint("# systemd unit printed above. Install with:")
         hint(f"#   mkdir -p {target.parent}")
-        hint(f"#   {_python()} -m agent2telegram service > {target}")
+        hint(f"#   agent2telegram service > {target}")
         hint("#   systemctl --user enable --now agent2telegram")
         hint("#   loginctl enable-linger $USER   # keep running after logout")
     else:
         print(systemd_unit())
-        hint("# No systemd/launchd detected — run 'python -m agent2telegram run' under your")
+        hint("# No systemd/launchd detected — run 'agent2telegram run' under your")
         hint("# own supervisor, or use the Docker image (see README).")
     return 0

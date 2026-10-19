@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.3 – 2026-10-19
+
+- Use launcher commands in setup/service hints; updates without a valid configuration guide users to setup.
+- Mask all typed secret characters and redact Telegram tokens from response errors, retries and tracebacks. Explain rejected tokens with a BotFather recovery hint.
+- Show only sessions matching the selected provider in the setup wizard.
+
 ## 1.2.2 – 2026-10-19
 
 - Setup and connect optionally register each started bridge with Agents Monitoring

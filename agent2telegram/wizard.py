@@ -38,9 +38,7 @@ def _ask(prompt: str, default: str = "") -> str:
 
 
 def _ask_secret(prompt: str) -> str:
-    """Read a secret (token / API key) with **live masking**: the first 4 characters show, the
-    rest appear as ``*`` as you type/paste. People expect to see *something* while typing (a fully
-    blank prompt confuses them), but the full secret still never lands in scrollback/screenshots.
+    """Read a secret with one asterisk per character, including short/invalid values.
     Falls back to plain input when there's no real terminal (e.g. piped)."""
     if not sys.stdin.isatty():
         return _ask(prompt)
@@ -59,7 +57,7 @@ def _ask_secret(prompt: str) -> str:
         tty.setraw(fd)
         while True:
             ch = sys.stdin.read(1)
-            if ch in ("\r", "\n", "\x04"):          # Enter / Ctrl-D
+            if ch in ("", "\r", "\n", "\x04"):          # Enter / Ctrl-D
                 break
             if ch == "\x03":                         # Ctrl-C
                 raise KeyboardInterrupt
@@ -72,7 +70,7 @@ def _ask_secret(prompt: str) -> str:
             if ord(ch) < 32:                         # ignore other control chars
                 continue
             buf.append(ch)
-            sys.stdout.write(ch if len(buf) <= 4 else "*")
+            sys.stdout.write("*")
             sys.stdout.flush()
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
@@ -163,7 +161,9 @@ def _choose_session(agent_cls) -> str:
     if not _tmux():
         print("  ⚠️  tmux isn't installed. Attach mode drives a tmux session — install tmux first.")
         return _ask("tmux session name to use anyway", "main")
-    sessions = _list_sessions()
+    sessions = [s for s in _list_sessions()
+                if (found := _detect_agent_in_session(s)) and found.name == agent_cls.name]
+    print(f"  Showing only sessions identified as {agent_cls.label}.")
     for i, s in enumerate(sessions, 1):
         print(f"  {i}) {s}")
     print(f"  n) create a NEW session and launch {agent_cls.label} in it")
@@ -194,7 +194,7 @@ def _enter_token() -> tuple[str, dict]:
             print(f"  ✓ token valid — bot is @{me.get('username')}")
             return token, me
         except TelegramError as e:
-            print(f"  ✗ rejected by Telegram: {e}")
+            print(f"  ✗ {str(e).replace(token, '[REDACTED]')}")
 
 
 def _capture_owner_id(token: str, bot_username: str) -> int | None:
@@ -301,7 +301,7 @@ def run() -> int:
     if not _start_bridge(path, state):
         return 1
     print(f"  Message @{me.get('username')} on Telegram to test it.")
-    print("  (Stop it anytime with:  python3 -m agent2telegram uninstall)")
+    print("  (Stop it anytime with:  agent2telegram uninstall)")
     return 0
 
 
@@ -357,7 +357,6 @@ def _detect_agent_in_session(session: str):
     """Which supported agent is actually running inside *session* — so we don't ask again after
     the user already picked the session. Walks the session's pane process subtree and matches the
     adapter binaries. Returns the adapter class, or None if it can't tell."""
-    import re
     try:
         panes = subprocess.run(["tmux", "list-panes", "-t", session, "-F", "#{pane_pid}"],
                                capture_output=True, text=True, timeout=5).stdout.split()
@@ -366,7 +365,11 @@ def _detect_agent_in_session(session: str):
         return None
     if not pane_pids:
         return None
-    ps = subprocess.run(["ps", "-eo", "pid=,ppid=,command="], capture_output=True, text=True).stdout
+    try:
+        ps = subprocess.run(["ps", "-eo", "pid=,ppid=,command="], capture_output=True,
+                            text=True, check=True, timeout=5).stdout
+    except (subprocess.SubprocessError, OSError):
+        return None
     children: dict[int, list[int]] = {}
     cmd: dict[int, str] = {}
     for line in ps.splitlines():
@@ -387,16 +390,29 @@ def _detect_agent_in_session(session: str):
         if p in cmd:
             cmds.append(cmd[p])
         stack.extend(children.get(p, []))
-    # Match each command on its own (so the regex's ^ anchor is per-command, not lost in a join),
-    # and anchor the binary only at start-of-string or a path '/', with no trailing anchor — so it
-    # also catches node-wrapper forms like '/.../claude-code/cli.js'.
+    # Match executables, never prompt text, cwd or arbitrary later arguments.
+    binaries = set()
+    for command in cmds:
+        try:
+            argv = shlex.split(command)
+        except ValueError:
+            continue
+        if not argv:
+            continue
+        binary = Path(argv[0]).name
+        if binary in ('node', 'nodejs') and len(argv) > 1:
+            path = Path(argv[1])
+            binary = path.stem
+            if path.name == 'cli.js' and 'claude-code' in path.parts:
+                binary = 'claude'
+        binaries.add(binary)
+    matches = []
     for cls in adapters.available():
         if cls.name not in ATTACH_SUPPORTED or not cls.binary:
             continue
-        pat = re.compile(rf"(?:^|/){re.escape(cls.binary)}")
-        if any(pat.search(c) for c in cmds):
-            return cls
-    return None
+        if cls.binary in binaries:
+            matches.append(cls)
+    return matches[0] if len(matches) == 1 else None
 
 
 def connect(name: str | None = None) -> int:
@@ -477,7 +493,7 @@ def connect(name: str | None = None) -> int:
 def set_elevenlabs(config: str | None = None) -> int:
     """`agent2telegram set-elevenlabs` — add/replace the ElevenLabs API key on an EXISTING bridge
     config (enables voice-message transcription), then restart the running bridge(s) so it applies.
-    The key is entered with the same masked prompt as the bot token (first chars shown, rest as *)."""
+    The key is entered with the same fully masked prompt as the bot token."""
     import os
     if config:
         os.environ["AGENT2TELEGRAM_CONFIG"] = config

@@ -117,7 +117,9 @@ def split_message(text: str, limit: int = MAX_MESSAGE_LEN) -> list[str]:
 
 
 class TelegramError(Exception):
-    pass
+    def __init__(self, message: str, *, network_error: bool = False):
+        super().__init__(message)
+        self.network_error = network_error
 
 
 def is_network_error(exc: BaseException) -> bool:
@@ -125,7 +127,7 @@ def is_network_error(exc: BaseException) -> bool:
     including gaierror "nodename nor servname"/Errno 8) or wrapped in ``TelegramError``
     (``__cause__``). ``json.JSONDecodeError`` = a malformed response = also transient. Used so
     self-healing outages are not logged as ERROR (which would trip a monitoring alert)."""
-    if isinstance(exc, OSError):
+    if isinstance(exc, OSError) or getattr(exc, 'network_error', False):
         return True
     cause = getattr(exc, "__cause__", None)
     return isinstance(cause, (OSError, json.JSONDecodeError))
@@ -141,6 +143,18 @@ class TelegramClient:
         # `opener` is injectable so tests can run without touching the network.
         self._opener = opener or urllib.request.build_opener()
 
+    def _safe_error(self, value) -> str:
+        from .redaction import redact
+        text = str(value)
+        for token in (self._token, urllib.parse.quote(self._token, safe='')):
+            text = text.replace(token, '[REDACTED]')
+        return redact(text)
+
+    def _http_error(self, method: str, code: int, reason) -> TelegramError:
+        if code == 401:
+            return TelegramError('Telegram rejected the token – copy it again in full from @BotFather')
+        return TelegramError(f'{method}: HTTP {code} {self._safe_error(reason)}')
+
     # ---- low-level ---------------------------------------------------------
     def _call(self, method: str, params: dict | None = None, *, timeout: float = 65,
               retries: int | None = None) -> dict:
@@ -155,7 +169,9 @@ class TelegramClient:
                 with self._opener.open(req, timeout=timeout) as resp:
                     body = json.loads(resp.read().decode("utf-8"))
                 if not body.get("ok"):
-                    raise TelegramError(f"{method}: {body.get('description', 'unknown error')}")
+                    if body.get('error_code') == 401:
+                        raise self._http_error(method, 401, '')
+                    raise TelegramError(f"{method}: {self._safe_error(body.get('description', 'unknown error'))}")
                 return body["result"]
             except urllib.error.HTTPError as e:
                 retry_after = self._retry_after(e)
@@ -167,13 +183,13 @@ class TelegramClient:
                     log.warning("%s: HTTP %s, retry %d/%d (backoff)", method, e.code, attempt, mx)
                     self._backoff(attempt)
                     continue
-                raise TelegramError(f"{method}: HTTP {e.code} {e.reason}") from e
+                raise self._http_error(method, e.code, e.reason) from None
             except (urllib.error.URLError, TimeoutError, ConnectionError, json.JSONDecodeError) as e:
                 if attempt <= mx:
-                    log.warning("%s: %s, retry %d/%d (backoff)", method, e, attempt, mx)
+                    log.warning("%s: %s, retry %d/%d (backoff)", method, self._safe_error(e), attempt, mx)
                     self._backoff(attempt)
                     continue
-                raise TelegramError(f"{method}: {e}") from e
+                raise TelegramError(f"{method}: {self._safe_error(e)}", network_error=True) from None
 
     @staticmethod
     def _retry_after(err: urllib.error.HTTPError) -> int | None:
@@ -219,10 +235,15 @@ class TelegramClient:
             try:
                 with self._opener.open(urllib.request.Request(url), timeout=timeout) as resp:
                     return resp.read()
-            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-                last = e
+            except urllib.error.HTTPError as e:
+                if e.code < 500:
+                    raise self._http_error('download', e.code, e.reason) from None
+                last = self._safe_error(e)
                 self._backoff(attempt)
-        raise TelegramError(f"download failed: {last}")
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+                last = self._safe_error(e)
+                self._backoff(attempt)
+        raise TelegramError(f"download failed: {last}", network_error=True) from None
 
     def send_plain_id(self, chat_id: int, text: str, *, parse_mode: str | None = None) -> int | None:
         """Send a message and return its message_id (for editable status bubbles)."""
@@ -311,7 +332,9 @@ class TelegramClient:
                 with self._opener.open(req, timeout=timeout) as resp:
                     out = json.loads(resp.read().decode("utf-8"))
                 if not out.get("ok"):
-                    raise TelegramError(f"{method}: {out.get('description', 'unknown error')}")
+                    if out.get('error_code') == 401:
+                        raise self._http_error(method, 401, '')
+                    raise TelegramError(f"{method}: {self._safe_error(out.get('description', 'unknown error'))}")
                 return out["result"]
             except urllib.error.HTTPError as e:
                 retry_after = self._retry_after(e)
@@ -323,13 +346,13 @@ class TelegramClient:
                     log.warning("%s: HTTP %s, retry %d", method, e.code, attempt)
                     self._backoff(attempt)
                     continue
-                raise TelegramError(f"{method}: HTTP {e.code} {e.reason}") from e
+                raise self._http_error(method, e.code, e.reason) from None
             except (urllib.error.URLError, TimeoutError, ConnectionError, json.JSONDecodeError) as e:
                 if attempt <= self._max_retries:
-                    log.warning("%s: %s, retry %d", method, e, attempt)
+                    log.warning("%s: %s, retry %d", method, self._safe_error(e), attempt)
                     self._backoff(attempt)
                     continue
-                raise TelegramError(f"{method}: {e}") from e
+                raise TelegramError(f"{method}: {self._safe_error(e)}", network_error=True) from None
 
     def send_file(self, chat_id: int, path, *, caption: str | None = None,
                   meta: dict | None = None) -> None:

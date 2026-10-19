@@ -189,7 +189,7 @@ def load(path: Path | None = None) -> Config:
     p = path or config_path()
     if not p.exists():
         raise ConfigError(
-            f"No config at {p}. Run 'python -m agent2telegram setup' first."
+            f"No config at {p}. Run 'agent2telegram setup' first."
         )
     try:
         raw = json.loads(p.read_text("utf-8"))
