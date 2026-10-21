@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -62,6 +63,46 @@ def _mark(signal: str) -> None:
         pass
 
 
+def _parent(pid: int) -> int:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        return int(stat.rsplit(")", 1)[1].split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True,
+                             text=True, timeout=5).stdout.strip()
+        return int(out) if out else 0
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0
+
+
+def _own_tmux_session() -> str:
+    """The tmux session whose pane runs the Claude process that called this hook.
+
+    Claude Code may continue in a new conversation (new transcript id) after a restart or
+    /clear, so a stored session guard can go stale. The pane ancestry still says which bridge
+    owns this turn."""
+    try:
+        out = subprocess.run(["tmux", "list-panes", "-a", "-F", "#{pane_pid}\t#{session_name}"],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    panes = {}
+    for line in out.splitlines():
+        pid, _, name = line.partition("\t")
+        if pid.isdigit():
+            panes[int(pid)] = name
+    pid = os.getppid()
+    for _ in range(32):
+        if pid in panes:
+            return panes[pid]
+        if pid <= 1:
+            break
+        pid = _parent(pid)
+    return ""
+
+
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
@@ -95,6 +136,13 @@ def main() -> None:
                 matched = True
         else:
             guardless.append(c)
+    if not matched:
+        # Stale guard (Claude continued in a new conversation): match by the tmux session.
+        session = _own_tmux_session()
+        for c in cfgs:
+            if session and c.get("tmux_session") == session and c.get("claude_session_id"):
+                _mark(c["signal_file"])
+                matched = True
     if not matched:
         for c in guardless:
             _mark(c["signal_file"])

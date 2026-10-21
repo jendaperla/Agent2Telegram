@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.5 – 2026-10-21
+
+- Claude turns end correctly after Claude Code continues in a new conversation. The Stop hook matched only the session id stored at connect time; when it went stale, no turn ever ended and every next message got the "Got your message" busy notice. The hook now falls back to the tmux session that runs the calling Claude process.
+
 ## 1.2.4 – 2026-10-21
 
 - `set-elevenlabs` restarts the running bridges again, so voice messages work right after the key is set. It passed raw process tuples to the restart step, which failed with "restart skipped".
