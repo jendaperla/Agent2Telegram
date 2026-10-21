@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.4 – 2026-10-21
+
+- `set-elevenlabs` restarts the running bridges again, so voice messages work right after the key is set. It passed raw process tuples to the restart step, which failed with "restart skipped".
+
 ## 1.2.3 – 2026-10-19
 
 - Use launcher commands in setup/service hints; updates without a valid configuration guide users to setup.

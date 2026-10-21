@@ -549,7 +549,8 @@ def set_elevenlabs(config: str | None = None) -> int:
         from . import updater
         bridges = updater._running_bridges()
         if bridges:
-            n = updater._restart(bridges, updater._src())
+            src = updater._src()
+            n = updater._restart(updater._plan_restarts(bridges, src), src)
             print(f"  ✓ Restarted {n} bridge(s) — voice messages now transcribe via ElevenLabs.")
         else:
             print("  (no running bridge found — start it and the key will be picked up).")
