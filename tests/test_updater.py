@@ -165,6 +165,10 @@ class UpdateTests(unittest.TestCase):
         self.start.assert_not_called()
 
     def test_launchd_inspection_error_aborts_before_pull(self):
+        # Only when the launchd service is installed: then an unreadable state is a real unknown.
+        plist = self.home / 'Library/LaunchAgents/com.agent2telegram.bridge.plist'
+        plist.parent.mkdir(parents=True)
+        plist.write_text('<plist/>')
         original = self.command
         def command(argv, **kwargs):
             if argv[:2] == ['launchctl', 'print']:
@@ -224,3 +228,27 @@ class BackfillTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class LaunchdInspectionTest(unittest.TestCase):
+    """An unexpected launchctl code must not block bridges that launchd cannot be running."""
+
+    def inspect(self, home, code):
+        with patch.object(updater.sys, 'platform', 'darwin'), \
+             patch.object(updater.Path, 'home', return_value=Path(home)), \
+             patch.object(updater.subprocess, 'run', return_value=Mock(returncode=code, stdout='')):
+            return updater._launchd_bridge()
+
+    def test_unknown_code_without_plist_restarts_directly(self):
+        with TemporaryDirectory() as home:
+            target, pid = self.inspect(home, 125)
+        self.assertTrue(target.endswith('com.agent2telegram.bridge'))
+        self.assertIsNone(pid)
+
+    def test_unknown_code_with_plist_still_refuses(self):
+        with TemporaryDirectory() as home:
+            plist = Path(home) / 'Library/LaunchAgents/com.agent2telegram.bridge.plist'
+            plist.parent.mkdir(parents=True)
+            plist.write_text('<plist/>')
+            with self.assertRaises(RuntimeError):
+                self.inspect(home, 125)

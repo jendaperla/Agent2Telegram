@@ -145,7 +145,11 @@ def _launchd_bridge() -> tuple[str, str | None]:
         raise RuntimeError('Cannot inspect launchd; no bridges restarted.') from exc
     if result.returncode:
         # 113: service not loaded; 3: GUI domain does not exist (headless login).
-        if result.returncode not in (3, 113):
+        # Other codes (e.g. 125 from a tmux/SSH session outside the GUI domain) say nothing about
+        # the service. Without its plist, launchd cannot be running the bridge, so there is
+        # nothing to hand over and the bridges restart directly.
+        plist = Path.home() / 'Library/LaunchAgents/com.agent2telegram.bridge.plist'
+        if result.returncode not in (3, 113) and plist.exists():
             raise RuntimeError('Cannot inspect launchd service; no bridges restarted.')
         return target, None
     match = re.search(r'^\tpid = (\d+)\s*$', result.stdout, re.MULTILINE)

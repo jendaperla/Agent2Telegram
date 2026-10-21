@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.6 – 2026-10-21
+
+- Bridges restart on macOS also when `launchctl print` cannot inspect the GUI domain (exit code 125 over SSH or in tmux). Without the launchd plist the service cannot be running the bridge, so the bridges restart directly instead of aborting.
+- `set-elevenlabs` warns loudly when bridges were not restarted. A quiet "restart skipped" line left them on the old key and voice notes failed with HTTP 401.
+
 ## 1.2.5 – 2026-10-21
 
 - Claude turns end correctly after Claude Code continues in a new conversation. The Stop hook matched only the session id stored at connect time; when it went stale, no turn ever ended and every next message got the "Got your message" busy notice. The hook now falls back to the tmux session that runs the calling Claude process.

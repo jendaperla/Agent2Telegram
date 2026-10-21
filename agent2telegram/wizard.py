@@ -552,10 +552,14 @@ def set_elevenlabs(config: str | None = None) -> int:
             src = updater._src()
             n = updater._restart(updater._plan_restarts(bridges, src), src)
             print(f"  ✓ Restarted {n} bridge(s) — voice messages now transcribe via ElevenLabs.")
+            if n < len(bridges):
+                print(f"\n  ⚠ {len(bridges) - n} bridge(s) NOT restarted - they keep the OLD key until restarted.")
         else:
             print("  (no running bridge found — start it and the key will be picked up).")
     except Exception as e:
-        print(f"  (restart skipped: {e}) — restart the bridge manually to apply the key.")
+        # Loud: a quiet note here left bridges on the old key and voice notes failed with 401.
+        print(f"\n  ⚠ BRIDGES NOT RESTARTED ({e}).")
+        print("    They still use the OLD key until restarted - restart them now to apply it.")
     _also_configure_hermes(key, cfg.elevenlabs_language)
     return 0
 
