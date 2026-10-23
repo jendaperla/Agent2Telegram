@@ -124,6 +124,7 @@ def analyse(lines: list[str]) -> dict:
     durations = []
     start = None
     saw_fwd = False
+    first_reply = None
     for r in lines:
         if TURN_START in r:
             if start is not None and not saw_fwd:
@@ -131,16 +132,28 @@ def analyse(lines: list[str]) -> dict:
             v["turns"] += 1
             start = _time_of(r)
             saw_fwd = False
+            first_reply = None
         elif FWD in r:
             v["replies"] += 1
+            if not saw_fwd and start is not None:
+                t = _time_of(r)
+                if t is not None:
+                    first_reply = (t - start) % 86400
             saw_fwd = True
+        elif "TURN END backstop" in r:
+            # Must come before TURN_END: the backstop line also contains "TURN END" and the
+            # regular TURN END line follows it, so matching it there counted the turn twice.
+            v["backstop"] += 1
         elif TURN_END in r:
             m = re.search(r"dur=([\d.]+)s", r)
             if m:
                 d = float(m.group(1))
                 durations.append(d)
                 v["longest_turn"] = max(v["longest_turn"], d)
-                if d > 120:
+                # What the user feels is the wait for the FIRST reply, not how long the agent
+                # keeps working after it has already answered (long renders with progress updates).
+                wait = first_reply if saw_fwd and first_reply is not None else d
+                if wait > 120:
                     v["turns_over_2min"] += 1
             if not saw_fwd:
                 v["turns_without_reply"] += 1
@@ -151,8 +164,6 @@ def analyse(lines: list[str]) -> dict:
             v["inject_after_retry"] += 1
         elif "Attach bridge live" in r:
             v["restarts"] += 1
-        elif "TURN END backstop" in r:
-            v["backstop"] += 1
         elif "gave up after" in r:
             v["abandoned_files"] += 1
         elif "re-delivery still failing" in r:
@@ -182,7 +193,7 @@ TRACKED = {
     "abandoned_files": ("abandoned attachment", 1),
     "restarts": ("bridge restart", 5),
     "net_errors": ("genuine network error", 20),
-    "turns_over_2min": ("turn longer than two minutes", 10),
+    "turns_over_2min": ("first reply after more than two minutes", 10),
 }
 
 
@@ -200,7 +211,7 @@ PENALTIES = (
     ("inject_failed",    15, 45,  "failed write into the agent window"),
     ("queue_retries",     8, 24,  "repeated failed send"),
     ("restarts",          3, 12,  "bridge restart"),
-    ("turns_over_2min",   1, 8,   "turn over two minutes"),
+    ("turns_over_2min",   1, 8,   "first reply after more than two minutes"),
     ("net_errors",        1, 6,   "genuine network error"),
 )
 
