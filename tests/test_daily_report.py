@@ -37,6 +37,45 @@ class NetworkEventTests(unittest.TestCase):
         self.assertEqual(v["net_routine"], 0)
 
 
+class TurnWaitTests(unittest.TestCase):
+    """Health must reflect how long the user waited for an answer, not how long the agent kept
+    working after it had already replied."""
+
+    def test_long_turn_with_early_reply_is_not_penalised(self):
+        lines = [
+            "12:00:00 INFO attach: TURN START t=1",
+            "12:00:30 INFO attach: FWD (delivered) id=a 1 parts",
+            "12:20:00 INFO attach: TURN END t=2 dur=1200.0s from_tg=True",
+        ]
+
+        v = report.analyse(lines)
+
+        self.assertEqual(v["turns_over_2min"], 0)
+        self.assertEqual(v["longest_turn"], 1200.0)
+
+    def test_late_first_reply_is_penalised(self):
+        lines = [
+            "12:00:00 INFO attach: TURN START t=1",
+            "12:06:00 INFO attach: FWD (delivered) id=a 1 parts",
+            "12:10:00 INFO attach: TURN END t=2 dur=600.0s from_tg=True",
+        ]
+
+        self.assertEqual(report.analyse(lines)["turns_over_2min"], 1)
+
+    def test_backstop_turn_is_counted_once(self):
+        lines = [
+            "12:00:00 INFO attach: TURN START t=1",
+            "12:10:00 ERROR attach: TURN END backstop: Telegram turn ended without an answer; dur=600.0s",
+            "12:10:00 INFO attach: TURN END t=2 dur=600.0s from_tg=True text_sent=False",
+        ]
+
+        v = report.analyse(lines)
+
+        self.assertEqual(v["turns_over_2min"], 1)
+        self.assertEqual(v["backstop"], 1)
+        self.assertEqual(v["turns_without_reply"], 1)
+
+
 class ChangeTests(unittest.TestCase):
     """Without a comparison against the previous run the report looks the same every day and
     stops being read."""
