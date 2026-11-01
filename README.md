@@ -190,6 +190,23 @@ python3 -m agent2telegram notify --config ~/.config/agent2telegram/codex-config.
 It sends to the configured owner via the bot (Markdown rendered, same as chat replies). Handy
 in a `cron` line or at the end of a script so the agent tells you when something finishes.
 
+## Waking the agent from a script (`inject`)
+
+The opposite direction: a scheduler wants to hand the **running** agent a prompt without
+restarting it. `inject` types the text into the attached tmux pane the same way Telegram
+messages arrive (pane check, `send-keys` / bracketed paste) and waits until the Claude Code
+**UserPromptSubmit** hook confirms the prompt was really submitted:
+
+```bash
+python3 -m agent2telegram inject --config ~/.config/agent2telegram/inari.json --timeout 60 "Start the cycle."
+```
+
+Exit codes: `0` delivered and confirmed by the hook, `1` the pane is not running the agent
+(nothing typed), `2` typed but the hook did not confirm in time, `3` tmux or config error.
+Every attempt logs one line to syslog / the journal (`agent2telegram-inject`). The text goes
+in without the Telegram origin prefix, so it never moves the transcript pin. Needs the hooks
+from `install-hooks` (Claude Code only).
+
 ---
 
 ## Voice messages (optional)

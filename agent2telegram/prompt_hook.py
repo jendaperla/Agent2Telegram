@@ -16,6 +16,10 @@ The origin-prefix filter is essential, not cosmetic: UserPromptSubmit also fires
 ``<task-notification>`` turns (background-task results delivered to the model) and for
 anything typed in the terminal. None of those may move the pin.
 
+The same hook also acknowledges texts typed by ``agent2telegram inject`` (see ``inject.py``):
+it writes ``<state>/inject/<nonce>.ack`` when the submitted prompt matches a pending request.
+That works for every prompt, prefixed or not, and never touches the pin.
+
 Register it once (the wizard and ``agent2telegram install-hooks`` do this) in
 ``~/.claude/settings.json``::
 
@@ -101,12 +105,19 @@ def main() -> None:
         # transcripts live elsewhere — a pin there would point it at a Claude transcript.
         if (c.get("agent") or "").lower() != "claude-code":
             continue
-        if not prompt.startswith(_prefixes(c)):
-            continue
         # Scope to the bridge's tmux-session cwd when both sides are known, so two Claude
         # bridges on one machine can't pin each other's transcript (cross-chat delivery).
         want = (c.get("session_cwd") or "").strip()
         if want and cwd and _resolved(want) != _resolved(cwd):
+            continue
+        # `agent2telegram inject` waits for proof that its text was submitted; any prompt
+        # (not only Telegram ones) can be that text. Acknowledging never moves the pin.
+        try:
+            from .inject import acknowledge
+            acknowledge(c["signal_file"], prompt)
+        except Exception:
+            pass
+        if not prompt.startswith(_prefixes(c)):
             continue
         _pin(c["signal_file"], transcript, session_id)
 
