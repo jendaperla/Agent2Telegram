@@ -101,6 +101,33 @@ class InjectTests(unittest.TestCase):
         self.assertTrue((d / "a.ack").exists())
         self.assertFalse((d / "old.ack").exists())
 
+    def test_ack_sees_through_pasted_content_wrapper(self):
+        # Claude Code wraps a longer bracketed paste (1213 B yes, 612 B no) before the hook sees it
+        d = inject.inject_dir(str(self.signal))
+        d.mkdir()
+        text = "Zacina cyklus.\nwork order je pripraveny"
+        (d / "n.req").write_text(json.dumps({"digest": inject.digest(text), "ts": time.time()}))
+        self.assertEqual(inject.acknowledge(str(self.signal), "<pasted_content id=\"x1\">\nnoise\n</pasted_content id=\"x1\">"), [])
+        self.assertEqual(inject.acknowledge(str(self.signal), "<pasted_content id=\"x1\">\nnoise\n</pasted_content id=\"x1\">\n" + text), [],
+                         "a wrapper that does not enclose the whole prompt is not unwrapped")
+        self.assertEqual(inject.acknowledge(str(self.signal), "<pasted_content id=\"a\">\n" + text + "\n</pasted_content id=\"b\">"), [],
+                         "mismatched ids are not a wrapper")
+        self.assertEqual(inject.acknowledge(str(self.signal), "<pasted_content id=\"k7Qz\">\n" + text + "\n</pasted_content id=\"k7Qz\">"), ["n"])
+        self.assertTrue((d / "n.ack").exists())
+
+    def test_ack_of_text_that_is_itself_a_wrapper(self):
+        d = inject.inject_dir(str(self.signal))
+        d.mkdir()
+        text = "<pasted_content id=\"i\">ahoj</pasted_content id=\"i\">"
+        (d / "n.req").write_text(json.dumps({"digest": inject.digest(text), "ts": time.time()}))
+        self.assertEqual(inject.acknowledge(str(self.signal), "<pasted_content id=\"o\">" + text + "</pasted_content id=\"o\">"), ["n"])
+
+    def test_long_injected_text_acks_through_wrapper_returns_0(self):
+        text = "Zacina cyklus. " * 90  # ~1.3 kB, over the size where the TUI wraps the paste
+        s = FakeSession(on_inject=lambda t: self.hook(f'<pasted_content id="p9">\n{t}\n</pasted_content id="p9">'))
+        self.assertEqual(inject.run(self.cfg, text, timeout=2, session=s, poll=0.01), 0)
+        self.assertTrue(self.rc_line().startswith("rc=0"))
+
     def test_hook_respects_session_cwd(self):
         d = inject.inject_dir(str(self.signal))
         d.mkdir()

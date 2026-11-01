@@ -47,6 +47,17 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
 
 
+#: Claude Code wraps a longer bracketed paste (seen: 1213 B wrapped, 612 B not) as
+#: ``<pasted_content id="X">…</pasted_content id="X">`` before the hook sees the prompt.
+_PASTE_WRAPPER = re.compile(r'<pasted_content id="([^"]*)">(.*)</pasted_content id="\1">', re.DOTALL)
+
+
+def unwrap_paste(text: str) -> str | None:
+    """The inner text when one paste wrapper encloses the whole prompt, else None."""
+    m = _PASTE_WRAPPER.fullmatch((text or "").strip())
+    return m.group(2) if m else None
+
+
 def digest(text: str) -> str:
     return hashlib.sha256(normalize(text).encode("utf-8")).hexdigest()
 
@@ -62,12 +73,14 @@ def acknowledge(signal_file: str, prompt: str, now: float | None = None) -> list
     d = inject_dir(signal_file)
     if not d.is_dir():
         return acked
-    want = digest(prompt)
+    # the prompt as submitted, and without the TUI's paste wrapper (the request never has it)
+    inner = unwrap_paste(prompt)
+    want = {digest(prompt)} | ({digest(inner)} if inner is not None else set())
     now = now or time.time()
     for req in d.glob("*.req"):
         try:
             data = json.loads(req.read_text("utf-8"))
-            if now - float(data.get("ts", 0)) > REQ_TTL or data.get("digest") != want:
+            if now - float(data.get("ts", 0)) > REQ_TTL or data.get("digest") not in want:
                 continue
             ack = req.with_suffix(".ack")
             tmp = req.with_suffix(".ack.tmp")
