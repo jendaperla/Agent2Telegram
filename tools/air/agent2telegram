@@ -1,0 +1,5 @@
+#!/bin/sh
+# agent2telegram — CLI na Airu vzdy ze zdrojoveho stromu, ktery aktualizuje a2t-deploy.
+# Nahrazuje console script z `pip install`: ten importoval zmrazenou kopii v site-packages,
+# kterou a2t-deploy neaktualizuje (2. 11. 2026: inject v cycle.sh bezel na kopii z 1. 11.).
+exec env PYTHONPATH="$HOME/.agent2telegram-src${PYTHONPATH:+:$PYTHONPATH}" /usr/bin/python3 -m agent2telegram "$@"

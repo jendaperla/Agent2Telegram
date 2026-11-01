@@ -38,7 +38,15 @@ install_tool() {
   echo "Skript: $name aktualizovan"
 }
 install_tool a2t-deploy
-[ "$USER" = agents ] && install_tool a2t-watch.sh
+if [ "$USER" = agents ]; then
+  install_tool a2t-watch.sh
+  install_tool agent2telegram   # CLI pro cycle.sh a mail-push (inject, notify)
+fi
+# Kopie z `pip install` v site-packages se s a2t-deploy rozjede a chyti kazde python3 -m
+# agent2telegram bez PYTHONPATH. CLI ma byt jen wrapper vyse; kopie je chyba, ne zaloha.
+if /usr/bin/python3 -c 'import agent2telegram, sys; sys.exit(0 if "/site-packages/" in agent2telegram.__file__ else 1)' 2>/dev/null; then
+  echo "VAROVANI: agent2telegram je i v site-packages (zmrazena kopie) — odstran: /usr/bin/python3 -m pip uninstall --break-system-packages agent2telegram" >&2
+fi
 
 SINCE="$(date '+%Y-%m-%d %H:%M:%S')"
 for u in "${UNITS[@]}"; do
