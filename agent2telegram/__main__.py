@@ -245,6 +245,11 @@ def main(argv: list[str] | None = None) -> int:
     nt.add_argument("--config", help="path to a specific bridge config")
     nt.add_argument("--file", action="append",
                     help="attach a file from an outbox folder (repeatable)")
+    ij = sub.add_parser("inject", help="type a text into the attached agent and wait for the "
+                                       "UserPromptSubmit hook to confirm it (exit 0/1/2/3)")
+    ij.add_argument("text", nargs="?", help="text to deliver (omit to read from stdin)")
+    ij.add_argument("--config", help="path to a specific bridge config")
+    ij.add_argument("--timeout", type=float, default=60, help="seconds to wait for the hook (default 60)")
     sub.add_parser("install-hooks", help="register the Claude Code hooks (Stop + UserPromptSubmit); "
                                          "idempotent — for installs upgraded without the wizard")
     sub.add_parser("service", help="print a systemd/launchd service unit")
@@ -275,6 +280,9 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_run(args)
     if args.command == "notify":
         return _cmd_notify(args)
+    if args.command == "inject":
+        from . import inject
+        return inject.cmd(args)
     if args.command == "install-hooks":
         from . import wizard
         wizard._register_claude_hook()
