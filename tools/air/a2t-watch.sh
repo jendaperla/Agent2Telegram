@@ -8,12 +8,12 @@
 #   2. fork origin/main vs. nasazeny kod u llm-brain (z /var/tmp/a2t-head-llm-brain,
 #      ktery zapisuje ExecStartPost jeho unity pri kazdem startu — rika, co BEZI)
 #   3. fork origin/main vs. nasazeny kod u agents (lokalni HEAD)
-# Kdyz cokoli selze, unit skonci nenulove a OnFailure posle alarm pres grain bota.
+# Kdyz cokoli selze, unit skonci nenulove a OnFailure posle alarm pres bota Inari.
 set -euo pipefail
 
 SRC="$HOME/.agent2telegram-src"
 export PYTHONPATH="$SRC"
-NOTIFY_CONFIG="$HOME/.config/agent2telegram/grain-mesh-sync.json"
+NOTIFY_CONFIG="$HOME/.config/agent2telegram/inari.json"
 
 cd "$SRC"
 git fetch -q origin
