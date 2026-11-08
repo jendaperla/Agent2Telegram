@@ -7,6 +7,7 @@ written with ``0600`` permissions and never logged.
 from __future__ import annotations
 
 import json
+import math
 import os
 import stat
 from dataclasses import dataclass, field, asdict
@@ -57,6 +58,7 @@ class Config:
     # ---- persistent "attach" mode (drive an existing live agent session) ----
     mode: str = "oneshot"               # "oneshot" | "attach"
     tmux_session: str = ""              # name of the existing tmux session to drive
+    enter_verify_timeout: float = 8.0   # seconds before retrying a swallowed Enter once
     signal_file: str = ""               # where the Stop hook writes the final answer
     transcript_path: str = ""           # agent transcript to tail for interim updates
     origin_prefix: str = "Telegram:"    # injected before each message; hook forwards only these
@@ -99,6 +101,10 @@ class Config:
         return base
 
     def validate(self) -> None:
+        if (isinstance(self.enter_verify_timeout, bool)
+                or not isinstance(self.enter_verify_timeout, (int, float))
+                or not math.isfinite(self.enter_verify_timeout) or self.enter_verify_timeout <= 0):
+            raise ConfigError("'enter_verify_timeout' must be a positive finite number.")
         if not isinstance(self.require_mention, bool):
             raise ConfigError("'require_mention' must be a boolean.")
         if type(self.restart_notice) is not bool:
