@@ -256,6 +256,14 @@ accepts only @mentions, commands addressed to that bot, and replies to its messa
 Other group messages are silently ignored, including receipt acknowledgments. Private chats
 are unchanged. The default is `false`; the authorized-user allowlist is always enforced.
 
+After injecting a message, attach mode checks the last visible input prompt every 0.2 seconds.
+If the message tail remains there for `"enter_verify_timeout": 8.0` seconds, the bridge checks
+that the agent is still running, sends Enter once more, and logs `enter_resend session=...`.
+If the input is still stuck after another 2 seconds, or verification fails, it logs
+`enter_not_submitted session=...` and preserves turn tracking. The timeout must be a positive
+finite number. This screen heuristic supports Claude Code and Codex prompt markers; hidden
+paste previews and changed TUI layouts can prevent detection. It does not prove transcript receipt.
+
 Operational notices: `"language": "cs"` translates the busy acknowledgment and the default
 startup notice into Czech (`"en"` is the default; this does not configure speech recognition).
 `"restart_notice": true` enables one short notice after successful bridge startup checks.
