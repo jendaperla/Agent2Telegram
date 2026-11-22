@@ -346,6 +346,8 @@ class AttachBridge:
         # Voice-reply mode is persisted in the state dir (survives restart), not just memory.
         self._voice_state_path = _state_dir(self.cfg) / "voice_mode"
         self._voice_on = self._load_voice_state()
+        # Built here, not lazily, so concurrent voice replies never race on creating it.
+        self._pronunciation = tts.PronunciationMap()
         # Persisted ledger of already-forwarded message uuids — survives restarts/crashes/reboots
         # so resuming an interrupted turn never re-sends what was already delivered.
         self._sent_path = Path.home() / ".config" / "agent2telegram" / "attach_sent.txt"
@@ -1823,10 +1825,16 @@ class AttachBridge:
             return False
         try:
             spoken = tts.sanitize_for_speech(text)            # rough safety net only
+            # Optional pronunciation map (voice only, `text` stays as sent to Telegram). The
+            # file is re-read when it changes, so no bridge restart is needed after an edit.
+            if self.cfg.tts_pronunciation_file:
+                spoken = tts.apply_pronunciation(
+                    spoken, self._pronunciation.rules(self.cfg.tts_pronunciation_file))
+            extra = {"language_code": self.cfg.tts_language} if self.cfg.tts_language else {}
             # Long narrations go in sentence-sized pieces (see tts.synthesize_long); short
             # replies are a single piece, so nothing changes for them.
             segments = tts.synthesize_long(spoken, api_key=key, voice_id=self.cfg.tts_voice_id,
-                                           model_id=self.cfg.tts_model_id)
+                                           model_id=self.cfg.tts_model_id, **extra)
         except Exception as e:
             log.warning("voice reply TTS failed: %s", e)
             return False

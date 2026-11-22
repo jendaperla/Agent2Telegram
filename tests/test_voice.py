@@ -17,6 +17,7 @@ def _voice_bridge(td, *, key="el-key", on=False, session=None):
     b._sent_path = Path(td) / "attach_sent.txt"     # _mark_sent persists here
     # Observe the immediate text send directly; the durable outbox path is covered elsewhere.
     b._use_durable_outbox = False
+    b._pronunciation = attach_mod.tts.PronunciationMap()   # normally built in __init__
     return b
 
 
