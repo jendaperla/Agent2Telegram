@@ -222,6 +222,30 @@ export ELEVENLABS_API_KEY="sk_..."     # or put "elevenlabs_api_key" in config.j
 Without a key, voice messages get a short "not enabled" notice. Images and files work with no
 extra setup.
 
+### Spoken replies (`/voice`)
+
+With a key, `/voice` makes the bridge answer with voice notes (ElevenLabs text-to-speech). These
+config keys tune the voice; all are optional:
+
+| Key | Default | What it does |
+|---|---|---|
+| `tts_voice_id` | `XB0fDUnXU5powFXDhCwa` | ElevenLabs voice |
+| `tts_model_id` | `eleven_flash_v2_5` | ElevenLabs model |
+| `tts_language` | `""` | ISO 639-1 code (e.g. `"cs"`) sent as `language_code`. Blank = the model detects the language from the text. |
+| `tts_pronunciation_file` | `""` | Path to a JSON map of words to respell for the voice. Blank = no map. |
+
+The pronunciation file is read from that path (keep it where its owner maintains it, do not
+copy it). Format:
+```json
+{ "kmeny": [ { "z": "Alaigned", "na": "Elajnd" } ] }
+```
+Each `z` is a stem: it matches at the start of a whole word, case-insensitively, and the rest of
+the word is kept (`Alaignedu` → `Elajndu`; `nealaigned` stays). Other keys in the file are
+ignored. The map changes only the text sent to text-to-speech, never the Telegram message. The
+bridge checks the file's modification time before each voice reply, so an edit applies to the
+next reply without a restart. A missing or invalid file (one bad item rejects the whole file)
+logs one warning and the voice speaks without the map.
+
 ## Configuration
 
 Stored at `~/.config/agent2telegram/config.json` (mode `0600`). The token may instead be

@@ -46,6 +46,8 @@ class Config:
     elevenlabs_language: str = ""       # ISO code (cs, de…); blank = let Scribe auto-detect
     tts_voice_id: str = "XB0fDUnXU5powFXDhCwa"   # ElevenLabs voice for /voice replies (Charlotte)
     tts_model_id: str = "eleven_flash_v2_5"  # pulka ceny v3 ($0.05 vs $0.10 / 1k znaku), limit 40k misto 5k
+    tts_language: str = ""              # ISO code sent as TTS language_code; blank = auto-detect
+    tts_pronunciation_file: str = ""    # JSON stem map for the voice only; blank = no map
     # Extra bridge-level /commands: {"name": "shell command line"}. The bridge runs the
     # command locally and replies with its output — no agent turn involved. The command
     # line comes from THIS config file (owner-writable, trusted); the Telegram user only
@@ -115,6 +117,9 @@ class Config:
             v = getattr(self, name)
             if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
                 raise ConfigError(f"'{name}' must be a positive number.")
+        for name in ("tts_language", "tts_pronunciation_file"):
+            if not isinstance(getattr(self, name), str):
+                raise ConfigError(f"'{name}' must be a string.")
         if self.language not in ('en', 'cs'):
             raise ConfigError("'language' must be 'en' or 'cs'.")
         if (not isinstance(self.restart_notice_text, str) or len(self.restart_notice_text) > 200

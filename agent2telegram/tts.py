@@ -11,7 +11,10 @@ message, see attach.py). :func:`sanitize_for_speech` here is only a ROUGH SAFETY
 markdown / blank lines; it deliberately does NOT rewrite numbers or guess at paths.
 
 :func:`synthesize` turns text into mp3 bytes via the multilingual model, so the voice speaks
-whatever language the reply is in (no hard-coded Czech).
+whatever language the reply is in (no hard-coded Czech). A bot MAY pin the language with the
+optional ``tts_language`` config key (sent as ``language_code``) and MAY point
+``tts_pronunciation_file`` at a JSON map of stems to respell for the voice only (see
+:func:`apply_pronunciation`). Without those keys the request is exactly what it always was.
 """
 from __future__ import annotations
 
@@ -22,6 +25,7 @@ import socket
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 log = logging.getLogger("agent2telegram.tts")
 
@@ -81,15 +85,18 @@ def voice_settings_for(model_id: str) -> dict:
 def synthesize(text: str, *, api_key: str, voice_id: str, model_id: str = DEFAULT_MODEL_ID,
                output_format: str = DEFAULT_OUTPUT_FORMAT, opener=None, timeout: float = 60,
                retry_backoffs: tuple[float, ...] = TRANSIENT_BACKOFFS,
-               sleeper=time.sleep) -> bytes:
-    """Synthesize *text* to mp3 bytes with ElevenLabs. The key only ever goes into the header."""
+               sleeper=time.sleep, language_code: str = "") -> bytes:
+    """Synthesize *text* to mp3 bytes with ElevenLabs. The key only ever goes into the header.
+    *language_code* (ISO 639-1, e.g. ``cs``) is sent only when set; blank = model auto-detects."""
     if not api_key:
         raise TTSError("no ElevenLabs API key configured")
     if not (text or "").strip():
         raise TTSError("nothing to speak")
     url = TTS_URL.format(voice_id=voice_id) + f"?output_format={output_format}"
-    body = json.dumps({"text": text, "model_id": model_id,
-                       "voice_settings": voice_settings_for(model_id)}).encode("utf-8")
+    payload = {"text": text, "model_id": model_id, "voice_settings": voice_settings_for(model_id)}
+    if language_code:
+        payload["language_code"] = language_code
+    body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url, data=body,
         headers={"xi-api-key": api_key, "Content-Type": "application/json",
@@ -161,3 +168,75 @@ def synthesize_long(text: str, *, api_key: str, voice_id: str, model_id: str = D
         raise TTSError("nothing to speak")
     return [synthesize(piece, api_key=api_key, voice_id=voice_id, model_id=model_id, **kwargs)
             for piece in pieces]
+
+
+# ── Pronunciation map (2026-11-22) ───────────────────────────────────────────────────────
+# Inari's voice call already respells a few words for ElevenLabs (Alaigned -> Elajnd). The same
+# JSON file serves the Telegram voice replies: the bridge READS it from the configured path, it
+# never copies it. Format: {"kmeny": [{"z": "Alaigned", "na": "Elajnd"}, ...]}, any other keys
+# ignored. Rule (mirrors Inari voice/lib/vyslovnost.mjs): the stem matches at the start of a
+# whole word, case-insensitively, and the word's ending is kept (Alaignedu -> Elajndu).
+# Only the text sent to TTS changes; the Telegram text is never touched.
+
+
+def load_pronunciation(path) -> list[tuple[str, str]]:
+    """Read the stem map from *path*. Any problem (missing, bad JSON, bad item) -> ``[]`` and a
+    warning: the voice then speaks without the map, it never fails because of it. Like Inari,
+    one bad item rejects the whole file, so a typo is loud instead of half-applied."""
+    try:
+        data = json.loads(Path(path).expanduser().read_text("utf-8"))
+        stems = data.get("kmeny") if isinstance(data, dict) else None
+        if not isinstance(stems, list):
+            raise ValueError('missing "kmeny" list')
+        rules = []
+        for item in stems:
+            z = item.get("z") if isinstance(item, dict) else None
+            na = item.get("na") if isinstance(item, dict) else None
+            if not (isinstance(z, str) and z.strip() and isinstance(na, str) and na.strip()):
+                raise ValueError(f"bad item {item!r}")
+            rules.append((z, na))
+        return rules
+    except (OSError, ValueError) as e:      # JSONDecodeError is a ValueError
+        log.warning("pronunciation map %s unusable (%s); speaking without it", path, e)
+        return []
+
+
+def _stem_pattern(stem: str) -> re.Pattern:
+    # Not preceded by a letter/digit/underscore; the ending is letters only ([^\W\d_] is a
+    # Unicode letter, so Czech endings work); not followed by a digit/underscore.
+    return re.compile(r"(?<!\w)" + re.escape(stem) + r"([^\W\d_]*)(?![\d_])", re.IGNORECASE)
+
+
+def apply_pronunciation(text: str, rules) -> str:
+    """Respell every whole word starting with a stem from *rules*, keeping its ending."""
+    out = text or ""
+    for stem, spoken in rules or ():
+        out = _stem_pattern(stem).sub(lambda m, s=spoken: s + m.group(1), out)
+    return out
+
+
+class PronunciationMap:
+    """The map at a path, re-read only when the file's mtime/size changes. One ``stat`` per voice
+    reply, so an edit in Inari applies to the next reply without restarting the bridge, and a
+    missing or broken file warns once per change, not on every reply."""
+
+    _MISSING = object()
+
+    def __init__(self):
+        self._path = None
+        self._stamp = None
+        self._rules: list[tuple[str, str]] = []
+
+    def rules(self, path) -> list[tuple[str, str]]:
+        if not path:
+            return []
+        try:
+            st = Path(path).expanduser().stat()
+            stamp = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            stamp = self._MISSING
+        if path == self._path and stamp == self._stamp:
+            return self._rules
+        self._path, self._stamp = path, stamp
+        self._rules = load_pronunciation(path)
+        return self._rules
