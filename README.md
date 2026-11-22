@@ -231,7 +231,7 @@ config keys tune the voice; all are optional:
 |---|---|---|
 | `tts_voice_id` | `XB0fDUnXU5powFXDhCwa` | ElevenLabs voice |
 | `tts_model_id` | `eleven_flash_v2_5` | ElevenLabs model |
-| `tts_language` | `""` | ISO 639-1 code (e.g. `"cs"`) sent as `language_code`. Blank = the model detects the language from the text. |
+| `tts_language` | `""` | ISO 639-1 code (e.g. `"cs"`) sent as `language_code`. Blank = the model detects the language from the text. `language_code` works reliably with `eleven_flash_v2_5` and `eleven_turbo_v2_5`; with other models ElevenLabs may reject the request. |
 | `tts_pronunciation_file` | `""` | Path to a JSON map of words to respell for the voice. Blank = no map. |
 
 The pronunciation file is read from that path (keep it where its owner maintains it, do not
@@ -242,7 +242,7 @@ copy it). Format:
 Each `z` is a stem: it matches at the start of a whole word, case-insensitively, and the rest of
 the word is kept (`Alaignedu` → `Elajndu`; `nealaigned` stays). Other keys in the file are
 ignored. The map changes only the text sent to text-to-speech, never the Telegram message. The
-bridge checks the file's modification time before each voice reply, so an edit applies to the
+bridge checks the file (inode, modification time, size) before each voice reply, so an edit applies to the
 next reply without a restart. A missing or invalid file (one bad item rejects the whole file)
 logs one warning and the voice speaks without the map.
 

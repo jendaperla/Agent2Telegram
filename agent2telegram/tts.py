@@ -216,7 +216,7 @@ def apply_pronunciation(text: str, rules) -> str:
 
 
 class PronunciationMap:
-    """The map at a path, re-read only when the file's mtime/size changes. One ``stat`` per voice
+    """The map at a path, re-read only when the file's inode/mtime/size changes. One ``stat`` per voice
     reply, so an edit in Inari applies to the next reply without restarting the bridge, and a
     missing or broken file warns once per change, not on every reply."""
 
@@ -232,7 +232,7 @@ class PronunciationMap:
             return []
         try:
             st = Path(path).expanduser().stat()
-            stamp = (st.st_mtime_ns, st.st_size)
+            stamp = (st.st_ino, st.st_mtime_ns, st.st_size)   # ino: atomic os.replace
         except OSError:
             stamp = self._MISSING
         if path == self._path and stamp == self._stamp:

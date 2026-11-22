@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import stat
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -120,6 +121,9 @@ class Config:
         for name in ("tts_language", "tts_pronunciation_file"):
             if not isinstance(getattr(self, name), str):
                 raise ConfigError(f"'{name}' must be a string.")
+        self.tts_language = self.tts_language.strip().lower()
+        if self.tts_language and not re.fullmatch(r"[a-z]{2,3}", self.tts_language):
+            raise ConfigError("'tts_language' must be an ISO 639 code like 'cs' (or blank).")
         if self.language not in ('en', 'cs'):
             raise ConfigError("'language' must be 'en' or 'cs'.")
         if (not isinstance(self.restart_notice_text, str) or len(self.restart_notice_text) > 200

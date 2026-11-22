@@ -117,6 +117,22 @@ class PronunciationMapReloadTests(unittest.TestCase):
             os.utime(p, (later, later))
             self.assertEqual(m.rules(p), [("Alaigned", "Elejnd"), ("Jenda", "Jenda")])
 
+    def test_atomic_replace_is_picked_up(self):
+        # Same size and forced-equal mtime: only the inode tells the new file apart.
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "v.json"
+            p.write_text(json.dumps({"kmeny": [{"z": "Alaigned", "na": "Elajnd"}]}), "utf-8")
+            st = p.stat()
+            m = tts.PronunciationMap()
+            m.rules(p)
+            tmp = Path(td) / "v.json.tmp"
+            tmp.write_text(json.dumps({"kmeny": [{"z": "Alaigned", "na": "Elejnd"}]}), "utf-8")
+            os.utime(tmp, ns=(st.st_atime_ns, st.st_mtime_ns))
+            keep = Path(td) / "old"            # hold the old inode so it is not reused
+            os.link(p, keep)
+            os.replace(tmp, p)
+            self.assertEqual(m.rules(p), [("Alaigned", "Elejnd")])
+
     def test_unchanged_file_is_not_reread(self):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "v.json"
@@ -150,6 +166,16 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(c.tts_language, "")
         self.assertEqual(c.tts_pronunciation_file, "")
         c.validate()
+
+    def test_language_is_normalised(self):
+        c = self._cfg(tts_language=" CS ")
+        c.validate()
+        self.assertEqual(c.tts_language, "cs")
+
+    def test_language_must_be_bare_iso_code(self):
+        for bad in ("cs-CZ", "čeština", "c", "czech"):
+            with self.subTest(bad=bad), self.assertRaises(ConfigError):
+                self._cfg(tts_language=bad).validate()
 
     def test_must_be_strings(self):
         for kw in ({"tts_language": 5}, {"tts_pronunciation_file": ["x"]}):
