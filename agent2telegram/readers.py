@@ -136,6 +136,13 @@ def _file_tool_paths(name: str, inp) -> tuple:
     return tuple(p for p in raw if isinstance(p, str) and p.strip())
 
 
+#: ``turnOrigin`` values of an ``isMeta`` record that opens a turn on someone else's behalf.
+#: Counted on the live transcripts of 2026-11-24: 801 × ``peer`` (a message from another session
+#: or a teammate), 2 × ``scheduled``. ``auto_continuation`` is deliberately absent — see
+#: `ClaudeCodeReader._opens_foreign_turn`.
+FOREIGN_TURN_ORIGINS = frozenset({"peer", "scheduled"})
+
+
 class ClaudeCodeReader:
     """Claude Code transcript (one JSONL record per message; assistant records carry text and
     tool_use blocks; user records may be real messages or tool results). No turn boundaries in
@@ -172,9 +179,37 @@ class ClaudeCodeReader:
         a context compaction)."""
         return any(rec.get(k) for k in ("isCompactSummary", "isVisibleInTranscriptOnly", "isMeta"))
 
+    @staticmethod
+    def _opens_foreign_turn(rec: dict) -> bool:
+        """A harness record that OPENS a turn on someone else's behalf: a message from another
+        session or a teammate (``turnOrigin: "peer"``), a scheduled wake-up (``"scheduled"``).
+
+        Claude Code files such a record with ``isMeta``, so `_is_harness_record` alone would drop
+        it without a trace. The bridge then never learnt that a new turn had begun and kept the
+        Telegram origin of the PREVIOUS turn: a teammate's report woke the agent 14 minutes after
+        a Telegram turn had ended, and the agent's unmarked, deliberately local reply was pushed
+        to the owner's phone (inari #498, 2026-11-17 21:42).
+
+        Keyed on an explicit list of ``turnOrigin`` values (`FOREIGN_TURN_ORIGINS`), not on
+        "anything but human". ``auto_continuation`` ("usage limit has reset. Continue…") resumes
+        the INTERRUPTED turn, which may well be a Telegram one, so it must not clear the origin;
+        an unknown future value keeps the old behaviour (dropped) until someone looks at it.
+        Other isMeta records (reminders, skill bodies, the ``turnCompanion`` note written next to
+        a peer message) carry no ``turnOrigin`` and stay dropped: reporting them as well would
+        clear the origin between turns far more often, which is how the replies of 23. 8. and
+        2. 9. were lost.
+        """
+        return rec.get("turnOrigin") in FOREIGN_TURN_ORIGINS
+
     def user_text(self, rec: dict) -> str | None:
-        if rec.get("type") != "user" or self._is_tool_result(rec) or self._is_harness_record(rec):
+        if rec.get("type") != "user" or self._is_tool_result(rec):
             return None
+        if self._is_harness_record(rec):
+            if not self._opens_foreign_turn(rec):
+                return None
+            # A foreign turn has no origin prefix, so origin recovery after a restart reads it
+            # as local — which it is. Returned as-is: it is not synthetic for that purpose.
+            return _text_of(rec.get("message", {}).get("content")) or None
         t = _text_of(rec.get("message", {}).get("content"))
         if t and _is_synthetic_user(rec, t):
             return None                 # harness-written record — says nothing about origin
@@ -183,9 +218,16 @@ class ClaudeCodeReader:
     def parse(self, rec: dict):
         typ = rec.get("type")
         if typ == "user":
-            if self._is_tool_result(rec) or self._is_harness_record(rec):
-                return                      # a tool result / harness note is not something the person typed
+            if self._is_tool_result(rec):
+                return                      # a tool result is not something the person typed
             t = _text_of(rec.get("message", {}).get("content"))
+            if self._is_harness_record(rec):
+                # A harness note says nothing about origin — unless it opens a turn of its own
+                # (a teammate's message, a scheduled wake-up). That one is reported as `meta`:
+                # between turns it clears the Telegram origin, mid-turn it does not.
+                if self._opens_foreign_turn(rec) and t.strip():
+                    yield Ev("meta", text=t)
+                return
             if t.strip():
                 if _is_synthetic_user(rec, t):
                     # Harness-written — must not flip the turn's origin. It carries its text
